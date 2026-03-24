@@ -185,7 +185,11 @@ def scope_capture_raw(
     trigger_level_v: float,
     trigger_timeout_s: float,
 ) -> dict[int, list[float]]:
+    import time
     lib = _load_lib()
+
+    # Reset to clear any stuck state from a previous timed-out capture
+    lib.FDwfAnalogInReset(hdwf)
 
     for ch in (0, 1):
         lib.FDwfAnalogInChannelEnableSet(hdwf, c_int(ch), c_bool(False))
@@ -201,8 +205,8 @@ def scope_capture_raw(
     _check(lib.FDwfAnalogInAcquisitionModeSet(hdwf, _ACQMODE_SINGLE), "AcquisitionModeSet")
 
     if trigger_source == "none":
+        # trigsrcNone (0): acquisition fires immediately after Configure, no trigger needed
         _check(lib.FDwfAnalogInTriggerSourceSet(hdwf, _TRIGSRC_NONE), "TriggerSourceSet(none)")
-        _check(lib.FDwfAnalogInTriggerAutoTimeoutSet(hdwf, c_double(trigger_timeout_s)), "TriggerAutoTimeoutSet")
     else:
         _check(lib.FDwfAnalogInTriggerSourceSet(hdwf, _TRIGSRC_DET_ANALOG_IN), "TriggerSourceSet(det)")
         _check(lib.FDwfAnalogInTriggerAutoTimeoutSet(hdwf, c_double(trigger_timeout_s)), "TriggerAutoTimeoutSet")
@@ -213,17 +217,24 @@ def scope_capture_raw(
         _check(lib.FDwfAnalogInTriggerConditionSet(hdwf, edge_val), "TriggerConditionSet")
         _check(lib.FDwfAnalogInTriggerLevelSet(hdwf, c_double(trigger_level_v)), "TriggerLevelSet")
 
-    _check(lib.FDwfAnalogInConfigure(hdwf, c_bool(False), c_bool(True)), "Configure")
+    # fReconfigure=True applies all staged settings; fStart=True begins acquisition
+    _check(lib.FDwfAnalogInConfigure(hdwf, c_bool(True), c_bool(True)), "Configure")
 
-    import time
-    deadline = time.monotonic() + trigger_timeout_s + 1.0
+    # Poll until n_samples are valid or state reaches Done.
+    # Note: on some SDK versions the state stays at 3 (Running) throughout single
+    # acquisition and never transitions to Done (2). Checking samples_valid is the
+    # reliable cross-version completion test.
+    deadline = time.monotonic() + trigger_timeout_s + 2.0
     sts = c_ubyte()
+    samples_valid = c_int()
     while time.monotonic() < deadline:
         _check(lib.FDwfAnalogInStatus(hdwf, c_bool(True), byref(sts)), "Status")
-        if sts.value == _STATE_DONE.value:
+        lib.FDwfAnalogInStatusSamplesValid(hdwf, byref(samples_valid))
+        if samples_valid.value >= n_samples or sts.value == _STATE_DONE.value:
             break
         time.sleep(0.005)
     else:
+        lib.FDwfAnalogInReset(hdwf)
         from .errors import DigilentCaptureTimeoutError
         raise DigilentCaptureTimeoutError("Scope capture timed out")
 
