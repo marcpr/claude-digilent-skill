@@ -141,7 +141,44 @@ curl -s -X POST http://127.0.0.1:7272/api/digilent/measure/basic \
   }'
 ```
 
-### Full scope capture with trigger
+### Scope capture (free-run — recommended)
+
+**Important:** `scope/capture` with `trigger.enabled: true` consistently returns
+HTTP 504 on Analog Discovery 2. Always use free-run mode for raw waveform data.
+Use `scope/measure` (not `scope/capture`) when you only need metrics and want trigger support.
+
+**Buffer limits for `scope/capture`:**
+
+| Sample rate | Max reliable duration | Max samples |
+|-------------|----------------------|-------------|
+| 10 MS/s     | 0.1 ms               | ~1 000      |
+| 1 MS/s      | 5 ms                 | ~5 000      |
+| 200 kHz     | 50 ms                | ~10 000     |
+
+```bash
+curl -s -X POST http://127.0.0.1:7272/api/digilent/scope/capture \
+  -H "Content-Type: application/json" \
+  -d '{
+    "channels": [1, 2],
+    "range_v": 5.0,
+    "offset_v": 0.0,
+    "sample_rate_hz": 200000,
+    "duration_ms": 10,
+    "trigger": {"enabled": false},
+    "return_waveform": true
+  }'
+```
+
+Response includes per-channel metrics (`vmin`, `vmax`, `vpp`, `vavg`, `vrms`,
+`freq_est_hz`, `duty_cycle_percent`) and, when `return_waveform: true`, a
+`waveform` array with `channel` (integer), `time_s`, and `voltage_v` arrays.
+
+**Note:** The server returns `"channel": 1` (integer), not `"channel": "ch1"`.
+Normalize when parsing: `ch_name = f"ch{ch['channel']}" if isinstance(ch['channel'], int) else ch['channel']`
+
+### Scope capture at high frequencies (≥ 10 kHz signals)
+
+For signals ≥ 10 kHz use 10 MS/s with a short duration (0.05–0.1 ms):
 
 ```bash
 curl -s -X POST http://127.0.0.1:7272/api/digilent/scope/capture \
@@ -149,8 +186,24 @@ curl -s -X POST http://127.0.0.1:7272/api/digilent/scope/capture \
   -d '{
     "channels": [1],
     "range_v": 5.0,
-    "offset_v": 0.0,
-    "sample_rate_hz": 1000000,
+    "sample_rate_hz": 10000000,
+    "duration_ms": 0.1,
+    "trigger": {"enabled": false},
+    "return_waveform": true
+  }'
+```
+
+### Scope measure with trigger (metrics only, no raw samples)
+
+Use `scope/measure` when you only need scalar metrics and want reliable trigger support:
+
+```bash
+curl -s -X POST http://127.0.0.1:7272/api/digilent/scope/measure \
+  -H "Content-Type: application/json" \
+  -d '{
+    "channels": [1],
+    "range_v": 5.0,
+    "sample_rate_hz": 200000,
     "duration_ms": 10,
     "trigger": {
       "enabled": true,
@@ -158,12 +211,11 @@ curl -s -X POST http://127.0.0.1:7272/api/digilent/scope/capture \
       "edge": "rising",
       "level_v": 1.6,
       "timeout_ms": 1000
-    },
-    "return_waveform": false
+    }
   }'
 ```
 
-Metrics in response: `vmin`, `vmax`, `vpp`, `vavg`, `vrms`, `freq_est_hz`,
+Metrics: `vmin`, `vmax`, `vpp`, `vavg`, `vrms`, `freq_est_hz`,
 `duty_cycle_percent`, `rise_time_s`, `fall_time_s`
 
 ### Scope quick measure (no raw data)
@@ -235,6 +287,98 @@ curl -s -X POST http://127.0.0.1:7272/api/digilent/supplies/set \
   -H "Content-Type: application/json" \
   -d '{"vplus_v": 3.3, "enable_vplus": true, "confirm_unsafe": true}'
 ```
+
+---
+
+## Waveform Export (PNG, CSV, Markdown)
+
+Use `tools/plot_waveform.py` to capture raw waveform data and save it as PNG,
+CSV, and a Markdown report in one step.
+
+**Dependencies:** `pip install numpy matplotlib`
+
+```bash
+python tools/plot_waveform.py \
+  --channels 1 2 \
+  --rate 200000 \
+  --duration 10 \
+  --range 5.0 \
+  --out /tmp/capture
+```
+
+This produces:
+- `/tmp/capture.png` — multi-channel waveform plot
+- `/tmp/capture.csv` — time + voltage columns
+- `/tmp/capture.md` — Markdown report with embedded plot and scope settings
+
+**Key options:**
+```
+--channels N [N ...]   scope channel numbers (default: 1)
+--rate HZ              sample rate in Hz (default: 200000)
+--duration MS          capture duration in ms (default: 10)
+--range V              voltage range per channel (default: 5.0)
+--out PATH             output path prefix (no extension)
+--title STR            plot title
+```
+
+For high-frequency signals (≥ 10 kHz), use `--rate 10000000 --duration 0.1`.
+
+---
+
+## FFT Analysis
+
+Use `tools/fft_analyze.py` to run spectral analysis on a captured channel.
+Detects the fundamental frequency, harmonics H2–H10, THD, and SFDR.
+
+**Dependencies:** `pip install numpy matplotlib scipy`
+
+```bash
+python tools/fft_analyze.py \
+  --channel 1 \
+  --rate 1000000 \
+  --duration 5 \
+  --range 5.0 \
+  --out /tmp/fft
+```
+
+This produces:
+- `/tmp/fft.png` — two-panel plot (linear amplitude + dB spectrum)
+- `/tmp/fft.md` — Markdown report with fundamental, harmonics table, THD, SFDR
+
+---
+
+## DUT Identification (Bode Plot)
+
+Use `tools/dut_identify.py` for automated frequency sweep and DUT classification.
+
+**Wiring:**
+```
+W1  →  DUT input  →  CH1 (reference)
+           DUT output  →  CH2 (response)
+```
+
+**Dependencies:** `pip install numpy matplotlib scipy`
+
+```bash
+python tools/dut_identify.py \
+  --fstart 100 \
+  --fstop 500000 \
+  --steps 40 \
+  --amplitude 1.0 \
+  --out /tmp/bode
+```
+
+This produces:
+- `/tmp/bode.png` — Bode plot (gain dB + phase °) with annotated −3 dB point
+- `/tmp/bode_report.md` — classification, fc, roll-off slope, passband gain
+
+**Classification output:** `low_pass`, `high_pass`, `band_pass`, `notch`, or `amplifier`
+
+**Grenzfrequenz estimation** uses the phase method: `fc = f / tan(−φ)` which is
+more stable than the gain method when only partial rolloff is visible.
+
+**Capture strategy inside dut_identify:** free-run only, duration capped at 50 ms,
+sample rate auto-scaled to ≥ 20 samples/period. HTTP timeout set to 60 s.
 
 ---
 

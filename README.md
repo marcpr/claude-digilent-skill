@@ -19,7 +19,13 @@ git clone https://github.com/marcpr/claude-digilent-skill.git
 cd claude-digilent-skill
 ```
 
-No additional Python packages are required — the server uses the standard library only.
+No additional Python packages are required for the server — it uses the standard library only.
+
+The optional analysis tools (`tools/plot_waveform.py`, `tools/fft_analyze.py`, `tools/dut_identify.py`) require:
+
+```bash
+pip install numpy matplotlib scipy
+```
 
 ### 3. Verify setup
 
@@ -105,8 +111,8 @@ All endpoints are under `http://127.0.0.1:7272/api/digilent/`.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/digilent/scope/capture` | Analog capture with optional trigger and waveform data |
-| POST | `/api/digilent/scope/measure` | Like capture, always suppresses raw waveform |
+| POST | `/api/digilent/scope/capture` | Analog capture (free-run recommended); returns raw waveform when `return_waveform: true` |
+| POST | `/api/digilent/scope/measure` | Metrics only (no raw waveform); supports trigger reliably |
 | POST | `/api/digilent/logic/capture` | Digital channel capture |
 | POST | `/api/digilent/measure/basic` | Agent-friendly high-level action |
 
@@ -206,7 +212,14 @@ claude-digilent-skill/
 │   └── utils.py                Metric calculation, downsampling
 ├── tools/
 │   ├── digilent_local_server.py   Local HTTP server (main entry point)
-│   └── digilent_local_setup.py    Setup verification script
+│   ├── digilent_local_setup.py    Setup verification script
+│   ├── plot_waveform.py           Capture → PNG + CSV + Markdown report
+│   ├── fft_analyze.py             FFT analysis → spectrum PNG + Markdown report
+│   ├── dut_identify.py            Automated Bode sweep + DUT classification
+│   └── lab_report_plots.py        Helper: regenerate lab report plots from data
+├── docs/
+│   ├── extending-waveform-export.md   Developer guide for plot_waveform.py
+│   └── integration-guide.md           Integration reference for all new tools
 ├── tests/
 │   └── test_digilent_api.py    40 unit tests (mock-based, no hardware needed)
 └── .claude/
@@ -214,6 +227,60 @@ claude-digilent-skill/
         └── digilent-local/
             └── SKILL.md        Claude Code skill definition
 ```
+
+---
+
+## Analysis Tools
+
+Three standalone Python scripts extend the skill with waveform export and measurement analysis. All require `pip install numpy matplotlib scipy`.
+
+### plot_waveform.py — Waveform export
+
+Captures raw scope data and saves it as PNG, CSV, and a Markdown report.
+
+```bash
+python tools/plot_waveform.py --channels 1 2 --rate 200000 --duration 10 --out /tmp/capture
+```
+
+Output: `capture.png`, `capture.csv`, `capture.md`
+
+For high-frequency signals (≥ 10 kHz): `--rate 10000000 --duration 0.1`
+
+See [docs/extending-waveform-export.md](docs/extending-waveform-export.md) for full documentation.
+
+### fft_analyze.py — Spectral analysis
+
+Runs a Hanning-windowed FFT on a captured channel. Detects fundamental frequency, harmonics H2–H10, THD, and SFDR.
+
+```bash
+python tools/fft_analyze.py --channel 1 --rate 1000000 --duration 5 --out /tmp/fft
+```
+
+Output: `fft.png` (linear + dB panels), `fft.md`
+
+### dut_identify.py — DUT identification via Bode sweep
+
+Performs an automated frequency sweep and classifies the connected DUT as a filter or amplifier.
+
+**Wiring:** `W1 → DUT input → CH1` (reference), `DUT output → CH2` (response)
+
+```bash
+python tools/dut_identify.py --fstart 100 --fstop 500000 --steps 40 --amplitude 1.0 --out /tmp/bode
+```
+
+Output: `bode.png` (gain + phase), `bode_report.md` (type, fc, roll-off slope)
+
+---
+
+## Known Limitations (Analog Discovery 2)
+
+| Issue | Workaround |
+|-------|-----------|
+| `scope/capture` with `trigger.enabled: true` → HTTP 504 | Always use `trigger: {enabled: false}` (free-run) for raw captures |
+| `scope/measure` trigger works, but no raw waveform data | Use `scope/capture` free-run when samples are needed |
+| Buffer overflow at high sample rates | 10 MS/s → max ~0.1 ms; 1 MS/s → max ~5 ms; 200 kHz → max ~50 ms |
+| Server returns `"channel": 1` (int), not `"channel": "ch1"` | Normalize: `f"ch{ch['channel']}" if isinstance(ch['channel'], int)` |
+| `session/reset` + `device/open` → NoneType error | Do a full server restart instead |
 
 ---
 
