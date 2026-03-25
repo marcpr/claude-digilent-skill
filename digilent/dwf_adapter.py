@@ -51,11 +51,48 @@ _TRIGSRC_DET_DIGITAL_IN = c_int(3)
 _SLOPE_RISE = c_int(0)
 _SLOPE_FALL = c_int(1)
 _SLOPE_EITHER = c_int(2)
+
+# Trigger types (FDwfAnalogInTriggerTypeSet)
+_TRIGTYPE_EDGE = c_int(0)
+_TRIGTYPE_PULSE = c_int(1)
+_TRIGTYPE_TRANSITION = c_int(2)
+_TRIGTYPE_WINDOW = c_int(3)
+_TRIGTYPE_MAP: dict[str, c_int] = {
+    "edge": _TRIGTYPE_EDGE,
+    "pulse": _TRIGTYPE_PULSE,
+    "transition": _TRIGTYPE_TRANSITION,
+    "window": _TRIGTYPE_WINDOW,
+}
+
+# Channel filter types (FDwfAnalogInChannelFilterSet)
+_FILTER_DECIMATE = c_int(0)
+_FILTER_AVERAGE = c_int(1)
+_FILTER_MINMAX = c_int(2)
+_FILTER_MAP: dict[str, c_int] = {
+    "none": _FILTER_DECIMATE,
+    "decimate": _FILTER_DECIMATE,
+    "average": _FILTER_AVERAGE,
+    "minmax": _FILTER_MINMAX,
+}
+
+# Waveform function codes (FDwfAnalogOutNodeFunctionSet)
 _FUNC_DC = c_ubyte(0)
 _FUNC_SINE = c_ubyte(1)
 _FUNC_SQUARE = c_ubyte(2)
 _FUNC_TRIANGLE = c_ubyte(3)
+_FUNC_RAMPUP = c_ubyte(4)
+_FUNC_RAMPDOWN = c_ubyte(5)
+_FUNC_NOISE = c_ubyte(6)
+_FUNC_CUSTOM = c_ubyte(30)   # funcCustom in WaveForms SDK
+
+# Modulation types and nodes
+_MOD_AM = c_int(1)
+_MOD_FM = c_int(2)
+_MOD_MAP: dict[str, c_int] = {"am": _MOD_AM, "fm": _MOD_FM}
 _NODE_CARRIER = c_int(0)
+_NODE_AM = c_int(1)
+_NODE_FM = c_int(2)
+
 _ENUMFILTER_ALL = c_int(0)
 _STATE_DONE = c_ubyte(2)
 _DIG_FORMAT_16 = c_int(16)
@@ -254,6 +291,44 @@ def read_temperature(hdwf: c_int) -> float | None:
 # Oscilloscope (AnalogIn)
 # ---------------------------------------------------------------------------
 
+def scope_sample_raw(
+    hdwf: c_int,
+    channels: list[int],
+    range_v: float,
+    offset_v: float,
+) -> dict[int, float]:
+    """Read one instantaneous sample per channel via FDwfAnalogInStatusSample."""
+    import time
+    lib = _load_lib()
+
+    lib.FDwfAnalogInReset(hdwf)
+    for ch in (0, 1, 2, 3):
+        lib.FDwfAnalogInChannelEnableSet(hdwf, c_int(ch), c_bool(False))
+
+    for ch in channels:
+        idx = ch - 1
+        _check(lib.FDwfAnalogInChannelEnableSet(hdwf, c_int(idx), c_bool(True)), "ChannelEnableSet")
+        _check(lib.FDwfAnalogInChannelRangeSet(hdwf, c_int(idx), c_double(range_v)), "ChannelRangeSet")
+        _check(lib.FDwfAnalogInChannelOffsetSet(hdwf, c_int(idx), c_double(offset_v)), "ChannelOffsetSet")
+
+    _check(lib.FDwfAnalogInTriggerSourceSet(hdwf, _TRIGSRC_NONE), "TriggerSourceSet(none)")
+    _check(lib.FDwfAnalogInAcquisitionModeSet(hdwf, _ACQMODE_SINGLE), "AcquisitionModeSet")
+    _check(lib.FDwfAnalogInBufferSizeSet(hdwf, c_int(1)), "BufferSizeSet")
+    _check(lib.FDwfAnalogInConfigure(hdwf, c_bool(True), c_bool(True)), "Configure")
+
+    # Wait briefly for acquisition
+    time.sleep(0.01)
+    sts = c_ubyte()
+    _check(lib.FDwfAnalogInStatus(hdwf, c_bool(True), byref(sts)), "Status")
+
+    result: dict[int, float] = {}
+    for ch in channels:
+        val = c_double()
+        _check(lib.FDwfAnalogInStatusSample(hdwf, c_int(ch - 1), byref(val)), "StatusSample")
+        result[ch] = round(val.value, 6)
+    return result
+
+
 def scope_capture_raw(
     hdwf: c_int,
     channels: list[int],
@@ -266,6 +341,8 @@ def scope_capture_raw(
     trigger_channel: int,
     trigger_level_v: float,
     trigger_timeout_s: float,
+    filter: str = "none",
+    trigger_type: str = "edge",
 ) -> dict[int, list[float]]:
     import time
     lib = _load_lib()
@@ -276,11 +353,14 @@ def scope_capture_raw(
     for ch in (0, 1):
         lib.FDwfAnalogInChannelEnableSet(hdwf, c_int(ch), c_bool(False))
 
+    filter_val = _FILTER_MAP.get(filter, _FILTER_DECIMATE)
     for ch in channels:
         idx = ch - 1
         _check(lib.FDwfAnalogInChannelEnableSet(hdwf, c_int(idx), c_bool(True)), "ChannelEnableSet")
         _check(lib.FDwfAnalogInChannelRangeSet(hdwf, c_int(idx), c_double(range_v)), "ChannelRangeSet")
         _check(lib.FDwfAnalogInChannelOffsetSet(hdwf, c_int(idx), c_double(offset_v)), "ChannelOffsetSet")
+        if filter != "none":
+            lib.FDwfAnalogInChannelFilterSet(hdwf, c_int(idx), filter_val)
 
     _check(lib.FDwfAnalogInFrequencySet(hdwf, c_double(sample_rate_hz)), "FrequencySet")
     _check(lib.FDwfAnalogInBufferSizeSet(hdwf, c_int(n_samples)), "BufferSizeSet")
@@ -293,6 +373,8 @@ def scope_capture_raw(
         _check(lib.FDwfAnalogInTriggerSourceSet(hdwf, _TRIGSRC_DET_ANALOG_IN), "TriggerSourceSet(det)")
         _check(lib.FDwfAnalogInTriggerAutoTimeoutSet(hdwf, c_double(trigger_timeout_s)), "TriggerAutoTimeoutSet")
         _check(lib.FDwfAnalogInTriggerChannelSet(hdwf, c_int(trigger_channel - 1)), "TriggerChannelSet")
+        ttype_val = _TRIGTYPE_MAP.get(trigger_type, _TRIGTYPE_EDGE)
+        lib.FDwfAnalogInTriggerTypeSet(hdwf, ttype_val)
         edge_val = {"rising": _SLOPE_RISE, "falling": _SLOPE_FALL, "either": _SLOPE_EITHER}.get(
             trigger_edge, _SLOPE_RISE
         )
@@ -401,6 +483,10 @@ _WAVEFORM_MAP: dict[str, c_ubyte] = {
     "sine": _FUNC_SINE,
     "square": _FUNC_SQUARE,
     "triangle": _FUNC_TRIANGLE,
+    "rampup": _FUNC_RAMPUP,
+    "rampdown": _FUNC_RAMPDOWN,
+    "noise": _FUNC_NOISE,
+    "custom": _FUNC_CUSTOM,
 }
 
 
@@ -412,6 +498,7 @@ def wavegen_apply(
     amplitude_v: float,
     offset_v: float,
     symmetry_percent: float,
+    phase_deg: float,
     enable: bool,
 ) -> None:
     lib = _load_lib()
@@ -424,7 +511,37 @@ def wavegen_apply(
     _check(lib.FDwfAnalogOutNodeAmplitudeSet(hdwf, idx, _NODE_CARRIER, c_double(amplitude_v)), "NodeAmplitudeSet")
     _check(lib.FDwfAnalogOutNodeOffsetSet(hdwf, idx, _NODE_CARRIER, c_double(offset_v)), "NodeOffsetSet")
     _check(lib.FDwfAnalogOutNodeSymmetrySet(hdwf, idx, _NODE_CARRIER, c_double(symmetry_percent)), "NodeSymmetrySet")
+    _check(lib.FDwfAnalogOutNodePhaseSet(hdwf, idx, _NODE_CARRIER, c_double(phase_deg)), "NodePhaseSet")
     _check(lib.FDwfAnalogOutConfigure(hdwf, idx, c_bool(enable)), "Configure")
+
+
+def wavegen_set_custom_data(hdwf: c_int, channel: int, data: list[float]) -> None:
+    """Upload custom waveform samples via FDwfAnalogOutNodeDataSet."""
+    lib = _load_lib()
+    idx = c_int(channel - 1)
+    n = len(data)
+    buf = (c_double * n)(*data)
+    _check(lib.FDwfAnalogOutNodeDataSet(hdwf, idx, _NODE_CARRIER, buf, c_int(n)), "NodeDataSet")
+
+
+def wavegen_set_modulation(
+    hdwf: c_int,
+    channel: int,
+    mod_type: str,
+    freq_hz: float,
+    depth: float,
+) -> None:
+    """Configure AM or FM modulation on a wavegen channel."""
+    lib = _load_lib()
+    idx = c_int(channel - 1)
+    node = _NODE_AM if mod_type == "am" else _NODE_FM
+    mod_val = _MOD_MAP.get(mod_type, _MOD_AM)
+
+    _check(lib.FDwfAnalogOutNodeEnableSet(hdwf, idx, node, c_bool(True)), "ModNodeEnableSet")
+    _check(lib.FDwfAnalogOutNodeFunctionSet(hdwf, idx, node, _FUNC_SINE), "ModNodeFunctionSet")
+    _check(lib.FDwfAnalogOutNodeFrequencySet(hdwf, idx, node, c_double(freq_hz)), "ModNodeFrequencySet")
+    _check(lib.FDwfAnalogOutNodeAmplitudeSet(hdwf, idx, node, c_double(depth)), "ModNodeAmplitudeSet")
+    _check(lib.FDwfAnalogOutModulationSet(hdwf, idx, mod_val), "ModulationSet")
 
 
 def wavegen_stop(hdwf: c_int, channel: int) -> None:
@@ -443,6 +560,7 @@ def supplies_apply(
     enable_vplus: bool,
     enable_vminus: bool,
 ) -> None:
+    """Legacy AD2-hardcoded supply helper — kept for backward compatibility."""
     lib = _load_lib()
     _check(lib.FDwfAnalogIOChannelNodeSet(hdwf, c_int(0), c_int(0), c_double(1.0 if enable_vplus else 0.0)), "V+ enable")
     _check(lib.FDwfAnalogIOChannelNodeSet(hdwf, c_int(0), c_int(1), c_double(vplus_v)), "V+ voltage")
@@ -454,6 +572,38 @@ def supplies_apply(
 def supplies_off(hdwf: c_int) -> None:
     lib = _load_lib()
     lib.FDwfAnalogIOEnableSet(hdwf, c_bool(False))
+
+
+def supplies_channel_node_set(hdwf: c_int, ch_idx: int, node_idx: int, value: float) -> None:
+    """Set one AnalogIO channel node value (FDwfAnalogIOChannelNodeSet)."""
+    lib = _load_lib()
+    _check(
+        lib.FDwfAnalogIOChannelNodeSet(hdwf, c_int(ch_idx), c_int(node_idx), c_double(value)),
+        f"AnalogIOChannelNodeSet(ch={ch_idx},node={node_idx})",
+    )
+
+
+def supplies_channel_node_get(hdwf: c_int, ch_idx: int, node_idx: int) -> float:
+    """Read one AnalogIO channel node monitor value (FDwfAnalogIOChannelNodeStatus)."""
+    lib = _load_lib()
+    val = c_double()
+    _check(
+        lib.FDwfAnalogIOChannelNodeStatus(hdwf, c_int(ch_idx), c_int(node_idx), byref(val)),
+        f"AnalogIOChannelNodeStatus(ch={ch_idx},node={node_idx})",
+    )
+    return val.value
+
+
+def supplies_io_status(hdwf: c_int) -> None:
+    """Call FDwfAnalogIOStatus to update all monitor readings."""
+    lib = _load_lib()
+    _check(lib.FDwfAnalogIOStatus(hdwf), "AnalogIOStatus")
+
+
+def supplies_master_enable(hdwf: c_int, enable: bool) -> None:
+    """Set the AnalogIO master enable (FDwfAnalogIOEnableSet)."""
+    lib = _load_lib()
+    _check(lib.FDwfAnalogIOEnableSet(hdwf, c_bool(enable)), "AnalogIOEnableSet")
 
 
 # ---------------------------------------------------------------------------

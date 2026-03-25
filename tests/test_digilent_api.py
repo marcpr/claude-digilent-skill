@@ -51,11 +51,18 @@ def _make_dwf_mock():
     mod.close_device = MagicMock()
     mod.read_temperature = MagicMock(return_value=38.5)
     mod.scope_capture_raw = MagicMock()
+    mod.scope_sample_raw = MagicMock(return_value={1: 3.3})
     mod.logic_capture_raw = MagicMock()
     mod.wavegen_apply = MagicMock()
     mod.wavegen_stop = MagicMock()
+    mod.wavegen_set_custom_data = MagicMock()
+    mod.wavegen_set_modulation = MagicMock()
     mod.supplies_apply = MagicMock()
     mod.supplies_off = MagicMock()
+    mod.supplies_channel_node_set = MagicMock()
+    mod.supplies_channel_node_get = MagicMock(return_value=3.3)
+    mod.supplies_io_status = MagicMock()
+    mod.supplies_master_enable = MagicMock()
     mod.static_io_apply = MagicMock(return_value={})
     mod.is_available = MagicMock(return_value=True)
     return mod
@@ -81,9 +88,12 @@ from digilent.errors import (
 from digilent.models import (
     LogicCaptureRequest,
     ScopeCaptureRequest,
+    ScopeSampleRequest,
     StaticIoPin,
     StaticIoRequest,
+    SuppliesMasterRequest,
     SuppliesRequest,
+    SuppliesSetRequest,
     TriggerConfig,
     WavegenRequest,
 )
@@ -296,11 +306,13 @@ class TestWavegenValidation(unittest.TestCase):
 
 
 class TestSuppliesValidation(unittest.TestCase):
+    """Legacy set_legacy() path (AD2-style vplus/vminus API)."""
+
     def test_disabled_by_default(self):
         svc = SuppliesService(_manager(), _config())
         req = SuppliesRequest(vplus_v=3.3, enable_vplus=True, confirm_unsafe=True)
         with self.assertRaises(DigilentNotEnabledError):
-            svc._validate(req)
+            svc.set_legacy(req)
 
     def test_requires_confirm_unsafe(self):
         cfg = _config()
@@ -308,7 +320,7 @@ class TestSuppliesValidation(unittest.TestCase):
         svc = SuppliesService(_manager(), cfg)
         req = SuppliesRequest(vplus_v=3.3, enable_vplus=True, confirm_unsafe=False)
         with self.assertRaises(DigilentConfigInvalidError):
-            svc._validate(req)
+            svc.set_legacy(req)
 
     def test_vplus_too_high(self):
         cfg = _config()
@@ -317,7 +329,7 @@ class TestSuppliesValidation(unittest.TestCase):
         svc = SuppliesService(_manager(), cfg)
         req = SuppliesRequest(vplus_v=6.0, enable_vplus=True, confirm_unsafe=True)
         with self.assertRaises(DigilentRangeViolationError):
-            svc._validate(req)
+            svc.set_legacy(req)
 
 
 class TestStaticIoValidation(unittest.TestCase):
@@ -427,6 +439,239 @@ class TestConfig(unittest.TestCase):
         from digilent.config import load_config
         cfg = load_config("/nonexistent/path/digilent.json")
         self.assertIsInstance(cfg, DigilentConfig)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 tests: scope capability gate and new validations
+# ---------------------------------------------------------------------------
+
+class TestScopePhase2(unittest.TestCase):
+    def setUp(self):
+        self.m = _manager()
+        self.svc = ScopeService(self.m, _config())
+
+    def test_capability_gate_no_analog_in(self):
+        """DigilentNotAvailable when device has no analog inputs."""
+        from digilent.errors import DigilentNotAvailable
+        self.m._capability.analog_in_ch = 0
+        req = ScopeCaptureRequest(channels=[1], range_v=5.0, sample_rate_hz=1000, duration_ms=10)
+        with self.assertRaises(DigilentNotAvailable):
+            self.svc._validate(req)
+
+    def test_channel_exceeds_device_cap(self):
+        """Channel beyond device capability raises."""
+        self.m._capability.analog_in_ch = 2
+        req = ScopeCaptureRequest(channels=[3], range_v=5.0, sample_rate_hz=1000, duration_ms=10)
+        with self.assertRaises(DigilentConfigInvalidError):
+            self.svc._validate(req)
+
+    def test_rate_exceeds_device_cap(self):
+        """Sample rate beyond device capability raises."""
+        from digilent.errors import DigilentRangeViolationError
+        self.m._capability.max_scope_rate_hz = 1_000_000
+        req = ScopeCaptureRequest(channels=[1], range_v=5.0, sample_rate_hz=2_000_000, duration_ms=10)
+        with self.assertRaises(DigilentRangeViolationError):
+            self.svc._validate(req)
+
+    def test_invalid_filter(self):
+        req = ScopeCaptureRequest(channels=[1], range_v=5.0, sample_rate_hz=1000, duration_ms=10, filter="bad")
+        with self.assertRaises(DigilentConfigInvalidError):
+            self.svc._validate(req)
+
+    def test_invalid_trigger_type(self):
+        from digilent.models import TriggerConfig
+        req = ScopeCaptureRequest(
+            channels=[1], range_v=5.0, sample_rate_hz=1000, duration_ms=10,
+            trigger=TriggerConfig(enabled=True, source="ch1", type="badtype"),
+        )
+        with self.assertRaises(DigilentConfigInvalidError):
+            self.svc._validate(req)
+
+    def test_scope_sample_valid(self):
+        """sample() returns dict with channel keys."""
+        req = ScopeSampleRequest(channels=[1], range_v=5.0)
+        result = self.svc.sample(req)
+        self.assertTrue(result["ok"])
+        self.assertIn("ch1", result["samples"])
+
+    def test_scope_sample_invalid_channel(self):
+        req = ScopeSampleRequest(channels=[0], range_v=5.0)
+        with self.assertRaises(DigilentConfigInvalidError):
+            self.svc.sample(req)
+
+    def test_scope_sample_gate_no_analog_in(self):
+        """sample() also respects capability gate."""
+        from digilent.errors import DigilentNotAvailable
+        self.m._capability.analog_in_ch = 0
+        req = ScopeSampleRequest(channels=[1], range_v=5.0)
+        with self.assertRaises(DigilentNotAvailable):
+            self.svc.sample(req)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 tests: wavegen new waveforms, custom, modulation, EE block
+# ---------------------------------------------------------------------------
+
+class TestWavegenPhase2(unittest.TestCase):
+    def setUp(self):
+        self.m = _manager()
+        self.svc = WavegenService(self.m, _config())
+
+    def test_rampup_valid(self):
+        req = WavegenRequest(channel=1, waveform="rampup", frequency_hz=1000, amplitude_v=1.0)
+        self.svc._validate(req)  # must not raise
+
+    def test_rampdown_valid(self):
+        req = WavegenRequest(channel=1, waveform="rampdown", frequency_hz=1000, amplitude_v=1.0)
+        self.svc._validate(req)
+
+    def test_noise_valid(self):
+        req = WavegenRequest(channel=1, waveform="noise", frequency_hz=1000, amplitude_v=1.0)
+        self.svc._validate(req)
+
+    def test_custom_requires_data(self):
+        req = WavegenRequest(channel=1, waveform="custom", frequency_hz=1000, amplitude_v=1.0, custom_data=[])
+        with self.assertRaises(DigilentConfigInvalidError):
+            self.svc._validate(req)
+
+    def test_custom_with_data_valid(self):
+        req = WavegenRequest(channel=1, waveform="custom", frequency_hz=1000, amplitude_v=1.0,
+                             custom_data=[0.0, 0.5, 1.0, 0.5])
+        self.svc._validate(req)
+
+    def test_offset_v_too_high(self):
+        cfg = _config()
+        cfg.safe_limits.max_wavegen_offset_v = 5.0
+        svc = WavegenService(self.m, cfg)
+        req = WavegenRequest(channel=1, waveform="sine", frequency_hz=1000, amplitude_v=1.0, offset_v=6.0)
+        with self.assertRaises(DigilentRangeViolationError):
+            svc._validate(req)
+
+    def test_peak_voltage_exceeds_limit(self):
+        cfg = _config()
+        cfg.safe_limits.max_wavegen_amplitude_v = 5.0
+        cfg.safe_limits.max_wavegen_offset_v = 5.0
+        svc = WavegenService(self.m, cfg)
+        # amplitude=4V + offset=3V → peak=7V > 5V
+        req = WavegenRequest(channel=1, waveform="sine", frequency_hz=1000, amplitude_v=4.0, offset_v=3.0)
+        with self.assertRaises(DigilentRangeViolationError):
+            svc._validate(req)
+
+    def test_ee_channel_3_blocked(self):
+        """Electronics Explorer channels 3/4 are power supply outputs, not AWG."""
+        from digilent import capability_registry
+        self.m._capability = capability_registry.get_capability(1)  # EE devid=1
+        svc = WavegenService(self.m, _config())
+        req = WavegenRequest(channel=3, waveform="sine", frequency_hz=1000, amplitude_v=1.0)
+        with self.assertRaises(DigilentConfigInvalidError):
+            svc._validate(req)
+
+    def test_ee_channels_1_2_valid(self):
+        """EE channels 1 and 2 are valid AWG channels."""
+        from digilent import capability_registry
+        self.m._capability = capability_registry.get_capability(1)  # EE devid=1
+        svc = WavegenService(self.m, _config())
+        req = WavegenRequest(channel=2, waveform="sine", frequency_hz=1000, amplitude_v=1.0)
+        svc._validate(req)  # must not raise
+
+    def test_modulation_invalid_type(self):
+        req = WavegenRequest(channel=1, waveform="sine", frequency_hz=1000, amplitude_v=1.0,
+                             modulation={"type": "pm"})
+        with self.assertRaises(DigilentConfigInvalidError):
+            self.svc._validate(req)
+
+    def test_phase_deg_out_of_range(self):
+        req = WavegenRequest(channel=1, waveform="sine", frequency_hz=1000, amplitude_v=1.0, phase_deg=360.0)
+        with self.assertRaises(DigilentConfigInvalidError):
+            self.svc._validate(req)
+
+    def test_capability_gate_no_awg(self):
+        """DigilentNotAvailable when device has no AWG."""
+        from digilent.errors import DigilentNotAvailable
+        self.m._capability.analog_out_ch = 0
+        req = WavegenRequest(channel=1, waveform="sine", frequency_hz=1000, amplitude_v=1.0)
+        with self.assertRaises(DigilentNotAvailable):
+            self.svc._validate(req)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 tests: supplies table-driven service
+# ---------------------------------------------------------------------------
+
+class TestSuppliesPhase2(unittest.TestCase):
+    def setUp(self):
+        self.m = _manager()
+        # AD2 (devid=3) has V+, V-, USB_5V channels
+        self.cfg_on = _config()
+        self.cfg_on.allow_supplies = True
+        self.svc = SuppliesService(self.m, self.cfg_on)
+
+    def test_info_returns_channels(self):
+        result = self.svc.info()
+        self.assertTrue(result["ok"])
+        self.assertIn("supply_channels", result)
+        # AD2 has supply channels
+        self.assertGreater(len(result["supply_channels"]), 0)
+
+    def test_info_no_power_supply_raises(self):
+        from digilent.errors import DigilentNotAvailable
+        self.m._capability.has_power_supply = False
+        with self.assertRaises(DigilentNotAvailable):
+            self.svc.info()
+
+    def test_status_returns_readings(self):
+        result = self.svc.status()
+        self.assertTrue(result["ok"])
+        self.assertIn("readings", result)
+
+    def test_set_unknown_channel(self):
+        req = SuppliesSetRequest(channel_name="NONEXISTENT", enable=False, confirm_unsafe=True)
+        with self.assertRaises(DigilentConfigInvalidError):
+            self.svc.set(req)
+
+    def test_set_requires_confirm_unsafe_to_enable(self):
+        req = SuppliesSetRequest(channel_name="V+", enable=True, confirm_unsafe=False)
+        with self.assertRaises(DigilentConfigInvalidError):
+            self.svc.set(req)
+
+    def test_set_voltage_requires_confirm_unsafe(self):
+        req = SuppliesSetRequest(channel_name="V+", enable=False, voltage_v=3.3, confirm_unsafe=False)
+        with self.assertRaises(DigilentConfigInvalidError):
+            self.svc.set(req)
+
+    def test_set_voltage_out_of_range(self):
+        req = SuppliesSetRequest(channel_name="V+", enable=False, voltage_v=100.0, confirm_unsafe=True)
+        with self.assertRaises(DigilentRangeViolationError):
+            self.svc.set(req)
+
+    def test_set_read_only_channel(self):
+        """USB_5V is a monitor-only channel — write must be rejected."""
+        req = SuppliesSetRequest(channel_name="USB_5V", enable=False, confirm_unsafe=True)
+        with self.assertRaises(DigilentConfigInvalidError):
+            self.svc.set(req)
+
+    def test_set_disabled_raises(self):
+        svc_off = SuppliesService(self.m, _config())  # allow_supplies=False
+        req = SuppliesSetRequest(channel_name="V+", enable=False, confirm_unsafe=True)
+        with self.assertRaises(DigilentNotEnabledError):
+            svc_off.set(req)
+
+    def test_master_requires_confirm_unsafe(self):
+        req = SuppliesMasterRequest(enable=True, confirm_unsafe=False)
+        with self.assertRaises(DigilentConfigInvalidError):
+            self.svc.master(req)
+
+    def test_master_disabled_raises(self):
+        svc_off = SuppliesService(self.m, _config())
+        req = SuppliesMasterRequest(enable=True, confirm_unsafe=True)
+        with self.assertRaises(DigilentNotEnabledError):
+            svc_off.master(req)
+
+    def test_set_vplus_valid(self):
+        """Valid V+ set call should succeed and return ok."""
+        req = SuppliesSetRequest(channel_name="V+", enable=True, voltage_v=3.3, confirm_unsafe=True)
+        result = self.svc.set(req)
+        self.assertTrue(result["ok"])
 
 
 if __name__ == "__main__":

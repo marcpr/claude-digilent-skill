@@ -56,6 +56,21 @@ class ScopeCaptureRequest:
         return r
 
 
+@dataclass
+class ScopeSampleRequest:
+    channels: list[int] = field(default_factory=lambda: [1])
+    range_v: float = 5.0
+    offset_v: float = 0.0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ScopeSampleRequest":
+        r = cls()
+        for k, v in d.items():
+            if hasattr(r, k):
+                setattr(r, k, v)
+        return r
+
+
 # ---------------------------------------------------------------------------
 # Logic
 # ---------------------------------------------------------------------------
@@ -87,12 +102,15 @@ class LogicCaptureRequest:
 @dataclass
 class WavegenRequest:
     channel: int = 1
-    waveform: str = "sine"      # sine, square, triangle, dc
+    waveform: str = "sine"      # sine, square, triangle, dc, rampup, rampdown, noise, custom
     frequency_hz: float = 1000.0
     amplitude_v: float = 1.0
     offset_v: float = 0.0
     symmetry_percent: float = 50.0
+    phase_deg: float = 0.0
     enable: bool = True
+    custom_data: list[float] = field(default_factory=list)
+    modulation: dict = field(default_factory=dict)  # {"type": "am"|"fm", "freq_hz": float, "depth": float}
 
     @classmethod
     def from_dict(cls, d: dict) -> "WavegenRequest":

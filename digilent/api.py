@@ -26,7 +26,17 @@ from .config import DigilentConfig, load_config
 from .device_manager import DeviceManager
 from .errors import DigilentBusyError, DigilentConfigInvalidError, DigilentError, DigilentNotFoundError, DigilentTransportError
 from .logic_service import LogicService
-from .models import BasicMeasureRequest, LogicCaptureRequest, ScopeCaptureRequest, StaticIoRequest, SuppliesRequest, WavegenRequest
+from .models import (
+    BasicMeasureRequest,
+    LogicCaptureRequest,
+    ScopeCaptureRequest,
+    ScopeSampleRequest,
+    StaticIoRequest,
+    SuppliesMasterRequest,
+    SuppliesRequest,
+    SuppliesSetRequest,
+    WavegenRequest,
+)
 from .orchestration import OrchestrationService
 from .scope_service import ScopeService
 from .supplies_service import StaticIoService, SuppliesService
@@ -103,6 +113,10 @@ def handle_get(handler, path: str) -> None:
         _h_capabilities(handler)
     elif path == "/api/digilent/ping":
         handler._send_json({"ok": True, "server": "digilent-local", "version": "1.0"})
+    elif path == "/api/digilent/supplies/info":
+        _h_supplies_info(handler)
+    elif path == "/api/digilent/supplies/status":
+        _h_supplies_status(handler)
     else:
         _not_found(handler, path)
 
@@ -113,10 +127,12 @@ def handle_post(handler, path: str) -> None:
         "/api/digilent/device/close": _h_device_close,
         "/api/digilent/scope/capture": _h_scope_capture,
         "/api/digilent/scope/measure": _h_scope_measure,
+        "/api/digilent/scope/sample": _h_scope_sample,
         "/api/digilent/logic/capture": _h_logic_capture,
         "/api/digilent/wavegen/set": _h_wavegen_set,
         "/api/digilent/wavegen/stop": _h_wavegen_stop,
         "/api/digilent/supplies/set": _h_supplies_set,
+        "/api/digilent/supplies/master": _h_supplies_master,
         "/api/digilent/static-io/set": _h_static_io_set,
         "/api/digilent/measure/basic": _h_measure_basic,
         "/api/digilent/session/reset": _h_session_reset,
@@ -271,6 +287,13 @@ def _h_scope_measure(handler) -> None:
     _run(handler, _scope.measure, req)
 
 
+def _h_scope_sample(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = ScopeSampleRequest.from_dict(handler._read_json() or {})
+    _run(handler, _scope.sample, req)
+
+
 def _h_logic_capture(handler) -> None:
     if _ok_if_not_init(handler):
         return
@@ -292,11 +315,30 @@ def _h_wavegen_stop(handler) -> None:
     _run(handler, _wavegen.stop, int(body.get("channel", 1)))
 
 
+def _h_supplies_info(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    _run(handler, _supplies.info)
+
+
+def _h_supplies_status(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    _run(handler, _supplies.status)
+
+
 def _h_supplies_set(handler) -> None:
     if _ok_if_not_init(handler):
         return
-    req = SuppliesRequest.from_dict(handler._read_json() or {})
+    req = SuppliesSetRequest.from_dict(handler._read_json() or {})
     _run(handler, _supplies.set, req)
+
+
+def _h_supplies_master(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = SuppliesMasterRequest.from_dict(handler._read_json() or {})
+    _run(handler, _supplies.master, req)
 
 
 def _h_static_io_set(handler) -> None:
