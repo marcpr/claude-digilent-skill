@@ -10,7 +10,7 @@ from . import dwf_adapter as dwf
 from .config import DigilentConfig
 from .device_manager import DeviceManager
 from .errors import DigilentConfigInvalidError, DigilentNotAvailable, DigilentRangeViolationError
-from .models import ScopeCaptureRequest, ScopeSampleRequest
+from .models import ScopeCaptureRequest, ScopeRecordRequest, ScopeSampleRequest
 from .utils import compute_scope_metrics, downsample_minmax
 
 _VALID_FILTERS = {"none", "decimate", "average", "minmax"}
@@ -136,6 +136,92 @@ class ScopeService:
             "samples": {f"ch{ch}": v for ch, v in raw.items()},
             "duration_ms": duration_ms,
         }
+
+    def record(self, req: ScopeRecordRequest) -> dict:
+        """Long streaming capture using record acquisition mode."""
+        cap = self._manager.capability
+        if cap is not None and cap.analog_in_ch == 0:
+            raise DigilentNotAvailable(
+                "Oscilloscope not available on this device",
+                {"device": cap.name},
+            )
+        if not req.channels:
+            raise DigilentConfigInvalidError("channels must not be empty")
+        if req.duration_ms <= 0:
+            raise DigilentConfigInvalidError("duration_ms must be positive")
+        if req.sample_rate_hz <= 0:
+            raise DigilentConfigInvalidError("sample_rate_hz must be positive")
+
+        total_samples = int(req.sample_rate_hz * req.duration_ms / 1000)
+        total_samples = max(total_samples, 16)
+
+        trigger_source = "ch1" if req.trigger.enabled else "none"
+        try:
+            trigger_channel = int(req.trigger.source.replace("ch", ""))
+        except (ValueError, AttributeError):
+            trigger_channel = 1
+
+        t_start = time.monotonic()
+        with self._manager.session() as hdwf:
+            ch_data, stats = dwf.scope_record_raw(
+                hdwf=hdwf,
+                channels=req.channels,
+                range_v=req.range_v,
+                offset_v=req.offset_v,
+                sample_rate_hz=float(req.sample_rate_hz),
+                total_samples=total_samples,
+                trigger_source=trigger_source,
+                trigger_channel=trigger_channel,
+                trigger_level_v=req.trigger.level_v,
+                trigger_edge=req.trigger.edge,
+                trigger_timeout_s=req.trigger.auto_timeout_s if req.trigger.enabled else (
+                    self._cfg.default_timeout_ms / 1000.0
+                ),
+            )
+        duration_ms = round((time.monotonic() - t_start) * 1000, 1)
+
+        metrics: dict[str, dict] = {}
+        for ch, samples in ch_data.items():
+            if samples:
+                metrics[f"ch{ch}"] = compute_scope_metrics(samples, float(req.sample_rate_hz))
+
+        response: dict = {
+            "ok": True,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "device": self._manager.device_info.name,
+            "metrics": metrics,
+            "duration_ms": duration_ms,
+            "samples_valid": stats["samples_valid"],
+            "samples_lost": stats["samples_lost"],
+            "samples_corrupted": stats["samples_corrupted"],
+        }
+
+        if stats["samples_lost"]:
+            response.setdefault("warnings", []).append(
+                f"Lost {stats['samples_lost']} samples during streaming"
+            )
+        if stats["samples_corrupted"]:
+            response.setdefault("warnings", []).append(
+                f"Corrupted {stats['samples_corrupted']} samples"
+            )
+
+        if req.return_waveform and self._cfg.allow_raw_waveforms:
+            dt_s = 1.0 / req.sample_rate_hz
+            channels_data = [
+                {"channel": f"ch{ch}", "y": [round(v, 6) for v in samples]}
+                for ch, samples in ch_data.items()
+            ]
+            response["waveform"] = {
+                "t_start_s": 0.0,
+                "dt_s": dt_s,
+                "unit_x": "s",
+                "unit_y": "V",
+                "channels": channels_data,
+            }
+        elif req.return_waveform:
+            response.setdefault("warnings", []).append("raw waveforms disabled by server configuration")
+
+        return response
 
     # ------------------------------------------------------------------
     # Validation

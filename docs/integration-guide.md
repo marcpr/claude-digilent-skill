@@ -78,6 +78,7 @@ See `docs/device-capabilities.md` for the full per-device capability table.
 | `POST /scope/capture` | Full capture with optional raw waveform data |
 | `POST /scope/measure` | Metrics only, trigger supported reliably |
 | `POST /scope/sample` | Instantaneous single-sample per channel |
+| `POST /scope/record` | Streaming long capture (record mode) |
 
 ### scope/capture
 
@@ -120,6 +121,49 @@ Quick single reading. Useful for DC voltage monitoring without a full capture.
 ```
 
 Returns: `{"ok": true, "samples": {"1": 3.28, "2": 0.01}}`
+
+### scope/record
+
+Use for captures longer than the device buffer allows (several hundred ms to
+minutes). Internally uses FDwfAnalogIn record mode (acqmodeRecord=3) which
+continuously streams samples to host RAM instead of the on-device buffer.
+
+```json
+{
+  "channels": [1],
+  "range_v": 5.0,
+  "offset_v": 0.0,
+  "sample_rate_hz": 100000,
+  "duration_ms": 500,
+  "trigger": {
+    "enabled": true,
+    "source": "ch1",
+    "edge": "rising",
+    "level_v": 1.0,
+    "auto_timeout_s": 2.0
+  },
+  "return_waveform": true
+}
+```
+
+Response extra fields vs `scope/capture`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `samples_valid` | int | Samples actually collected |
+| `samples_lost` | int | Samples dropped due to host CPU lag |
+| `samples_corrupted` | int | Corrupted samples flagged by hardware |
+
+Non-zero `samples_lost` means the host cannot keep up at the requested sample
+rate. Reduce `sample_rate_hz` or close other processes.
+
+**Comparison:**
+
+| | `scope/capture` | `scope/record` |
+|---|---|---|
+| Max duration | ~1 s at 1 MS/s | Minutes (host RAM) |
+| Trigger types | edge / pulse / transition / window | edge only |
+| Lost-sample detection | No | Yes |
 
 ---
 

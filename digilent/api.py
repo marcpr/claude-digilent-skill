@@ -47,6 +47,7 @@ from .models import (
     PatternSetRequest,
     PatternStopRequest,
     ScopeCaptureRequest,
+    ScopeRecordRequest,
     ScopeSampleRequest,
     SpiConfigureRequest,
     SpiTransferRequest,
@@ -163,6 +164,7 @@ def handle_post(handler, path: str) -> None:
         "/api/digilent/scope/capture": _h_scope_capture,
         "/api/digilent/scope/measure": _h_scope_measure,
         "/api/digilent/scope/sample": _h_scope_sample,
+        "/api/digilent/scope/record": _h_scope_record,
         "/api/digilent/logic/capture": _h_logic_capture,
         "/api/digilent/wavegen/set": _h_wavegen_set,
         "/api/digilent/wavegen/stop": _h_wavegen_stop,
@@ -347,6 +349,13 @@ def _h_scope_sample(handler) -> None:
         return
     req = ScopeSampleRequest.from_dict(handler._read_json() or {})
     _run(handler, _scope.sample, req)
+
+
+def _h_scope_record(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = ScopeRecordRequest.from_dict(handler._read_json() or {})
+    _run(handler, _scope.record, req)
 
 
 def _h_logic_capture(handler) -> None:

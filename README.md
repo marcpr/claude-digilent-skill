@@ -120,6 +120,7 @@ All endpoints are under `http://127.0.0.1:7272/api/digilent/`.
 | POST | `/scope/capture` | Analog capture; returns raw waveform when `return_waveform: true` |
 | POST | `/scope/measure` | Metrics only; supports trigger reliably |
 | POST | `/scope/sample` | Instantaneous single-sample read per channel |
+| POST | `/scope/record` | Streaming long capture (record mode); reports lost/corrupted samples |
 
 ### Logic Analyzer
 

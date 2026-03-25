@@ -71,6 +71,29 @@ class ScopeSampleRequest:
         return r
 
 
+@dataclass
+class ScopeRecordRequest:
+    """Stream long recordings using FDwfAnalogIn record mode."""
+    channels: list[int] = field(default_factory=lambda: [1])
+    range_v: float = 5.0
+    offset_v: float = 0.0
+    sample_rate_hz: float = 1_000_000.0
+    duration_ms: float = 100.0          # total record length
+    trigger: TriggerConfig = field(default_factory=TriggerConfig)
+    return_waveform: bool = False
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ScopeRecordRequest":
+        r = cls()
+        trig_raw = d.pop("trigger", None)
+        for k, v in d.items():
+            if hasattr(r, k):
+                setattr(r, k, v)
+        if trig_raw:
+            r.trigger = TriggerConfig.from_dict(trig_raw)
+        return r
+
+
 # ---------------------------------------------------------------------------
 # Logic
 # ---------------------------------------------------------------------------

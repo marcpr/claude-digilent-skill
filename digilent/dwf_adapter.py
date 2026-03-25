@@ -44,6 +44,7 @@ DECI_DIGITAL_IN_BUFFER_SIZE = 9
 DECI_DIGITAL_OUT_BUFFER_SIZE = 10
 
 _ACQMODE_SINGLE = c_int(1)
+_ACQMODE_RECORD = c_int(3)
 _TRIGSRC_NONE = c_int(0)
 _TRIGSRC_PC = c_int(1)
 _TRIGSRC_DET_ANALOG_IN = c_int(2)
@@ -329,6 +330,106 @@ def scope_sample_raw(
     return result
 
 
+def scope_record_raw(
+    hdwf: c_int,
+    channels: list[int],
+    range_v: float,
+    offset_v: float,
+    sample_rate_hz: float,
+    total_samples: int,
+    trigger_source: str = "none",
+    trigger_channel: int = 1,
+    trigger_level_v: float = 0.0,
+    trigger_edge: str = "rising",
+    trigger_timeout_s: float = 5.0,
+) -> dict:
+    """Stream-collect samples using FDwfAnalogIn record mode (acqmodeRecord=3).
+
+    Returns dict with per-channel sample lists plus acquisition statistics.
+    """
+    import time
+    from ctypes import c_double as _cd, c_int as _ci, byref as _br
+
+    lib = _load_lib()
+    lib.FDwfAnalogInReset(hdwf)
+
+    for ch in (0, 1, 2, 3):
+        lib.FDwfAnalogInChannelEnableSet(hdwf, _ci(ch), c_bool(False))
+
+    for ch in channels:
+        idx = ch - 1
+        _check(lib.FDwfAnalogInChannelEnableSet(hdwf, _ci(idx), c_bool(True)), "ChannelEnableSet")
+        _check(lib.FDwfAnalogInChannelRangeSet(hdwf, _ci(idx), _cd(range_v)), "ChannelRangeSet")
+        _check(lib.FDwfAnalogInChannelOffsetSet(hdwf, _ci(idx), _cd(offset_v)), "ChannelOffsetSet")
+
+    _check(lib.FDwfAnalogInFrequencySet(hdwf, _cd(sample_rate_hz)), "FrequencySet")
+    _check(lib.FDwfAnalogInAcquisitionModeSet(hdwf, _ACQMODE_RECORD), "AcquisitionModeSet(record)")
+
+    record_len_s = total_samples / sample_rate_hz
+    _check(lib.FDwfAnalogInRecordLengthSet(hdwf, _cd(record_len_s)), "RecordLengthSet")
+
+    if trigger_source == "none":
+        _check(lib.FDwfAnalogInTriggerSourceSet(hdwf, _TRIGSRC_NONE), "TriggerSourceSet(none)")
+    else:
+        _check(lib.FDwfAnalogInTriggerSourceSet(hdwf, _TRIGSRC_DET_ANALOG_IN), "TriggerSourceSet(det)")
+        _check(lib.FDwfAnalogInTriggerAutoTimeoutSet(hdwf, _cd(trigger_timeout_s)), "TriggerAutoTimeoutSet")
+        _check(lib.FDwfAnalogInTriggerChannelSet(hdwf, _ci(trigger_channel - 1)), "TriggerChannelSet")
+        _check(lib.FDwfAnalogInTriggerLevelSet(hdwf, _cd(trigger_level_v)), "TriggerLevelSet")
+        edge_val = {"rising": _SLOPE_RISE, "falling": _SLOPE_FALL, "either": _SLOPE_EITHER}.get(
+            trigger_edge, _SLOPE_RISE)
+        lib.FDwfAnalogInTriggerConditionSet(hdwf, edge_val)
+
+    _check(lib.FDwfAnalogInConfigure(hdwf, c_bool(False), c_bool(True)), "Configure(start)")
+
+    # Per-channel accumulators
+    ch_data: dict[int, list[float]] = {ch: [] for ch in channels}
+    samples_lost = 0
+    samples_corrupted = 0
+    n_valid = _ci(0)
+    n_lost = _ci(0)
+    n_corrupt = _ci(0)
+    sts = c_ubyte()
+
+    deadline = time.monotonic() + record_len_s + trigger_timeout_s + 2.0
+
+    while time.monotonic() < deadline:
+        if lib.FDwfAnalogInStatus(hdwf, c_bool(True), _br(sts)) == 0:
+            break
+
+        if lib.FDwfAnalogInStatusRecord(hdwf, _br(n_valid), _br(n_lost), _br(n_corrupt)) == 0:
+            break
+
+        samples_lost += n_lost.value
+        samples_corrupted += n_corrupt.value
+
+        if n_valid.value > 0:
+            chunk = n_valid.value
+            buf = (c_double * chunk)()
+            for ch in channels:
+                idx = ch - 1
+                if lib.FDwfAnalogInStatusData(hdwf, _ci(idx), buf, _ci(chunk)) != 0:
+                    ch_data[ch].extend(buf[:chunk])
+
+        # Done when we have enough samples or acquisition finished
+        total_collected = len(ch_data[channels[0]]) if channels else 0
+        if total_collected >= total_samples:
+            break
+        # DwfStateDone = 2
+        if sts.value == 2 and n_valid.value == 0:
+            break
+
+        time.sleep(0.005)
+
+    return {
+        ch: ch_data[ch][:total_samples]
+        for ch in channels
+    }, {
+        "samples_valid": len(ch_data[channels[0]]) if channels else 0,
+        "samples_lost": samples_lost,
+        "samples_corrupted": samples_corrupted,
+    }
+
+
 def scope_capture_raw(
     hdwf: c_int,
     channels: list[int],
@@ -434,7 +535,8 @@ def logic_capture_raw(
     _check(lib.FDwfDigitalInDividerSet(hdwf, c_uint(div)), "DividerSet")
     _check(lib.FDwfDigitalInSampleFormatSet(hdwf, _DIG_FORMAT_16), "SampleFormatSet")
     _check(lib.FDwfDigitalInBufferSizeSet(hdwf, c_int(n_samples)), "BufferSizeSet")
-    _check(lib.FDwfDigitalInAcquisitionModeSet(hdwf, _ACQMODE_SINGLE), "AcquisitionModeSet")
+    # Digital in uses acqmode=0 for single (not the same constant as analog in)
+    _check(lib.FDwfDigitalInAcquisitionModeSet(hdwf, c_int(0)), "AcquisitionModeSet")
 
     if trigger_enabled:
         _check(lib.FDwfDigitalInTriggerSourceSet(hdwf, _TRIGSRC_DET_DIGITAL_IN), "TriggerSourceSet")
@@ -452,12 +554,18 @@ def logic_capture_raw(
     _check(lib.FDwfDigitalInConfigure(hdwf, c_bool(False), c_bool(True)), "Configure")
 
     import time
+    _STATE_ARMED = c_ubyte(1)
     deadline = time.monotonic() + trigger_timeout_s + 1.0
     sts = c_ubyte()
+    pc_triggered = trigger_enabled  # for triggered mode SDK fires on edge; for free-run we send PC trigger
     while time.monotonic() < deadline:
         _check(lib.FDwfDigitalInStatus(hdwf, c_bool(True), byref(sts)), "Status")
         if sts.value == _STATE_DONE.value:
             break
+        # Send PC trigger once the instrument is armed (free-run mode)
+        if not pc_triggered and sts.value == _STATE_ARMED.value:
+            lib.FDwfDeviceTriggerPC(hdwf)
+            pc_triggered = True
         time.sleep(0.005)
     else:
         from .errors import DigilentCaptureTimeoutError
@@ -853,6 +961,16 @@ def impedance_measure(hdwf: c_int, measurement_names: list[str], timeout_s: floa
 def impedance_stop(hdwf: c_int) -> None:
     lib = _load_lib()
     lib.FDwfAnalogImpedanceConfigure(hdwf, c_int(0))
+
+
+def impedance_enable_set(hdwf: c_int, enable: int) -> None:
+    """Switch the dedicated IA connector on ADS Max (FDwfAnalogImpedanceEnableSet).
+
+    enable=1 routes W1/C1 to the IA connector; enable=0 restores normal scope/wavegen routing.
+    Must be called before impedance_configure() on devices with has_impedance=True.
+    """
+    lib = _load_lib()
+    _check(lib.FDwfAnalogImpedanceEnableSet(hdwf, c_int(enable)), "AnalogImpedanceEnableSet")
 
 
 def impedance_set_compensation(

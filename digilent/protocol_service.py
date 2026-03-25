@@ -27,6 +27,14 @@ from .models import (
 _VALID_PARITY = {"none", "even", "odd", "mark", "space"}
 _VALID_SPI_ORDERS = {"msb", "lsb"}
 
+# Device-specific protocol notes keyed by DEVID (returned in configure responses).
+_DEVICE_PROTOCOL_NOTES: dict[int, str] = {
+    8: (
+        "ADP5250 uses fixed protocol pins — see WaveForms SDK §14.6 for pinout. "
+        "Only I2C and SPI are supported; UART and CAN are not available on this device."
+    ),
+}
+
 
 class ProtocolService:
     def __init__(self, manager: DeviceManager, config: DigilentConfig) -> None:
@@ -45,6 +53,12 @@ class ProtocolService:
                 {"device": cap.name},
             )
 
+    def _device_note(self) -> str | None:
+        cap = self._manager.capability
+        if cap is None:
+            return None
+        return _DEVICE_PROTOCOL_NOTES.get(cap.devid)
+
     # ------------------------------------------------------------------
     # UART
     # ------------------------------------------------------------------
@@ -59,11 +73,15 @@ class ProtocolService:
                 hdwf, req.baud_rate, req.bits, req.parity,
                 req.stop_bits, req.tx_ch, req.rx_ch, req.polarity,
             )
-        return {
+        resp: dict = {
             "ok": True,
             "ts": datetime.now(timezone.utc).isoformat(),
             "baud_rate": req.baud_rate,
         }
+        note = self._device_note()
+        if note:
+            resp["device_note"] = note
+        return resp
 
     def uart_send(self, req: UartSendRequest) -> dict:
         self._require_protocols()
@@ -118,11 +136,15 @@ class ProtocolService:
                 req.clk_ch, req.mosi_ch, req.miso_ch,
                 req.cs_ch, req.cs_idle, req.order, req.duty_pct,
             )
-        return {
+        resp: dict = {
             "ok": True,
             "ts": datetime.now(timezone.utc).isoformat(),
             "freq_hz": req.freq_hz,
         }
+        note = self._device_note()
+        if note:
+            resp["device_note"] = note
+        return resp
 
     def spi_transfer(self, req: SpiTransferRequest) -> dict:
         self._require_protocols()
@@ -146,11 +168,15 @@ class ProtocolService:
 
         with self._manager.session() as hdwf:
             dwf.i2c_configure(hdwf, req.rate_hz, req.scl_ch, req.sda_ch)
-        return {
+        resp: dict = {
             "ok": True,
             "ts": datetime.now(timezone.utc).isoformat(),
             "rate_hz": req.rate_hz,
         }
+        note = self._device_note()
+        if note:
+            resp["device_note"] = note
+        return resp
 
     def i2c_write(self, req: I2cWriteRequest) -> dict:
         self._require_protocols()
@@ -210,11 +236,15 @@ class ProtocolService:
 
         with self._manager.session() as hdwf:
             dwf.can_configure(hdwf, req.rate_hz, req.tx_ch, req.rx_ch)
-        return {
+        resp: dict = {
             "ok": True,
             "ts": datetime.now(timezone.utc).isoformat(),
             "rate_hz": req.rate_hz,
         }
+        note = self._device_note()
+        if note:
+            resp["device_note"] = note
+        return resp
 
     def can_send(self, req: CanSendRequest) -> dict:
         self._require_protocols()

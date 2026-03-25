@@ -327,6 +327,50 @@ Metrics: `vmin`, `vmax`, `vpp`, `vavg`, `vrms`, `freq_est_hz`,
 
 ---
 
+## Oscilloscope — `scope/record` (streaming, long captures)
+
+Use `scope/record` for captures longer than the device buffer allows. It uses
+FDwfAnalogIn record mode (acqmodeRecord=3) which streams continuously to RAM:
+
+```bash
+curl -s -X POST http://127.0.0.1:7272/api/digilent/scope/record \
+  -H "Content-Type: application/json" \
+  -d '{
+    "channels": [1],
+    "range_v": 5.0,
+    "offset_v": 0.0,
+    "sample_rate_hz": 100000,
+    "duration_ms": 500,
+    "trigger": {
+      "enabled": false
+    },
+    "return_waveform": true
+  }'
+```
+
+Response includes the same `metrics` block as `scope/capture` plus:
+
+| Field | Description |
+|-------|-------------|
+| `samples_valid` | Samples actually collected |
+| `samples_lost` | Samples dropped (overflow) |
+| `samples_corrupted` | Corrupted samples flagged by hardware |
+
+When `return_waveform: true` the response also includes a `waveform` object
+with `t_start_s`, `dt_s`, `unit_x`, `unit_y`, and `channels[].y` arrays —
+same format as `scope/capture`.
+
+**When to use `scope/record` vs `scope/capture`:**
+
+| | `scope/capture` | `scope/record` |
+|---|---|---|
+| Acquisition mode | Single-shot buffer | Continuous streaming |
+| Max duration | Device RAM limited (~1 s at 1 MS/s) | Minutes (host RAM limited) |
+| Trigger types | edge, pulse, transition, window | edge only |
+| Lost-sample detection | No | Yes (`samples_lost` field) |
+
+---
+
 ## Logic Analyzer
 
 ```bash

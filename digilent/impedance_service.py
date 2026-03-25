@@ -58,8 +58,11 @@ class ImpedanceService:
     def configure(self, req: ImpedanceConfigureRequest) -> dict:
         self._require_impedance()
         self._check_amplitude(req.amplitude_v)
+        cap = self._manager.capability
 
         with self._manager.session() as hdwf:
+            if cap is not None and cap.has_impedance:
+                dwf.impedance_enable_set(hdwf, 1)
             dwf.impedance_configure(
                 hdwf,
                 req.frequency_hz, req.amplitude_v, req.offset_v,
@@ -113,8 +116,11 @@ class ImpedanceService:
         ]
 
         sweep_data: dict[str, list[float]] = {m: [] for m in req.measurements}
+        cap = self._manager.capability
 
         with self._manager.session() as hdwf:
+            if cap is not None and cap.has_impedance:
+                dwf.impedance_enable_set(hdwf, 1)
             dwf.impedance_configure(
                 hdwf,
                 frequencies[0], req.amplitude_v, req.offset_v,
@@ -127,6 +133,8 @@ class ImpedanceService:
                 for m in req.measurements:
                     sweep_data[m].append(values.get(m, 0.0))
             dwf.impedance_stop(hdwf)
+            if cap is not None and cap.has_impedance:
+                dwf.impedance_enable_set(hdwf, 0)
 
         return {
             "ok": True,
