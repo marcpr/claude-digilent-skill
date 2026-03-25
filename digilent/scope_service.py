@@ -76,7 +76,7 @@ class ScopeService:
             channels_data = []
             for ch, samples in raw.items():
                 downsampled = downsample_minmax(samples, req.max_points)
-                channels_data.append({"channel": ch, "y": [round(v, 6) for v in downsampled]})
+                channels_data.append({"channel": f"ch{ch}", "y": [round(v, 6) for v in downsampled]})
             response["waveform"] = {
                 "t_start_s": 0.0,
                 "dt_s": round(dt_s * len(raw[req.channels[0]]) / len(channels_data[0]["y"]), 9),

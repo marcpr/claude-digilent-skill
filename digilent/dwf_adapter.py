@@ -224,7 +224,7 @@ def scope_capture_raw(
     # Note: on some SDK versions the state stays at 3 (Running) throughout single
     # acquisition and never transitions to Done (2). Checking samples_valid is the
     # reliable cross-version completion test.
-    deadline = time.monotonic() + trigger_timeout_s + 2.0
+    deadline = time.monotonic() + trigger_timeout_s
     sts = c_ubyte()
     samples_valid = c_int()
     while time.monotonic() < deadline:

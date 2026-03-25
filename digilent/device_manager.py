@@ -142,6 +142,7 @@ class DeviceManager:
         if self.is_open:
             dwf.close_device(self._hdwf)
         self._hdwf = dwf.HDWF_NONE
+        self._info = DeviceInfo()
         if self._state not in (STATE_ERROR,):
             self._state = STATE_ABSENT
 
