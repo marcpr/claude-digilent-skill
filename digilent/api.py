@@ -99,6 +99,8 @@ def shutdown() -> None:
 def handle_get(handler, path: str) -> None:
     if path == "/api/digilent/status":
         _h_status(handler)
+    elif path == "/api/digilent/capabilities":
+        _h_capabilities(handler)
     elif path == "/api/digilent/ping":
         handler._send_json({"ok": True, "server": "digilent-local", "version": "1.0"})
     else:
@@ -157,6 +159,10 @@ def _error_response(exc: DigilentError) -> tuple[dict, int]:
         "DIGILENT_NOT_ENABLED": 403,
         "DIGILENT_CAPTURE_TIMEOUT": 504,
         "DIGILENT_TRIGGER_TIMEOUT": 504,
+        "DIGILENT_NOT_AVAILABLE": 405,
+        "DIGILENT_SDK_ERROR": 500,
+        "DIGILENT_PROTOCOL_ERROR": 422,
+        "DIGILENT_SESSION_LOST": 503,
     }
     return {
         "ok": False, "ts": _ts(), "request_id": _req_id(),
@@ -206,6 +212,34 @@ def _h_status(handler) -> None:
         return
     _manager.refresh_temperature()
     handler._send_json(_manager.status_dict())
+
+
+def _h_capabilities(handler) -> None:
+    if _manager is None:
+        handler._send_json({
+            "ok": False, "ts": _ts(), "request_id": _req_id(),
+            "error": {
+                "code": "DIGILENT_NOT_AVAILABLE",
+                "message": "Digilent services not initialised",
+            },
+        }, 503)
+        return
+    cap = _manager.capability
+    if cap is None:
+        handler._send_json({
+            "ok": False, "ts": _ts(), "request_id": _req_id(),
+            "error": {
+                "code": "DIGILENT_NOT_FOUND",
+                "message": "No device open — capabilities not available",
+            },
+        }, 503)
+        return
+    handler._send_json({
+        "ok": True,
+        "ts": _ts(),
+        "device": cap.name,
+        "data": cap.to_dict(),
+    })
 
 
 def _h_device_open(handler) -> None:

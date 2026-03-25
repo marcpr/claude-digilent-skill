@@ -15,13 +15,38 @@ from unittest.mock import MagicMock, patch
 # ---------------------------------------------------------------------------
 
 def _make_dwf_mock():
+    from digilent.capability_registry import DeviceEnumInfo
+
     mod = types.ModuleType("digilent.dwf_adapter")
     mod.HDWF_NONE = MagicMock()
     mod.HDWF_NONE.value = -1
-    mod.enumerate_devices = MagicMock(return_value=1)
-    mod.get_device_name = MagicMock(return_value="Analog Discovery 2 (mock)")
+
     mock_hdwf = MagicMock()
     mock_hdwf.value = 1
+
+    _mock_device = DeviceEnumInfo(
+        idx=0, devid=3, devver=1,
+        name="Analog Discovery 2 (mock)", sn="SN000001", is_open=False,
+    )
+
+    mod.enumerate_devices = MagicMock(return_value=1)
+    mod.enumerate_devices_full = MagicMock(return_value=[_mock_device])
+    mod.get_device_name = MagicMock(return_value="Analog Discovery 2 (mock)")
+    mod.get_device_type = MagicMock(return_value=(3, 1))
+    mod.get_device_sn = MagicMock(return_value="SN000001")
+    mod.get_device_is_opened = MagicMock(return_value=False)
+    mod.get_enum_config_count = MagicMock(return_value=0)
+    mod.get_enum_config_info = MagicMock(return_value=0)
+    mod.DECI_ANALOG_IN_CHANNEL_COUNT = 1
+    mod.DECI_ANALOG_OUT_CHANNEL_COUNT = 2
+    mod.DECI_ANALOG_IO_CHANNEL_COUNT = 3
+    mod.DECI_DIGITAL_IN_CHANNEL_COUNT = 4
+    mod.DECI_DIGITAL_OUT_CHANNEL_COUNT = 5
+    mod.DECI_DIGITAL_IO_CHANNEL_COUNT = 6
+    mod.DECI_ANALOG_IN_BUFFER_SIZE = 7
+    mod.DECI_ANALOG_OUT_BUFFER_SIZE = 8
+    mod.DECI_DIGITAL_IN_BUFFER_SIZE = 9
+    mod.DECI_DIGITAL_OUT_BUFFER_SIZE = 10
     mod.open_device = MagicMock(return_value=mock_hdwf)
     mod.close_device = MagicMock()
     mod.read_temperature = MagicMock(return_value=38.5)

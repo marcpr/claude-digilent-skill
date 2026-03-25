@@ -15,6 +15,7 @@ import os
 import sys
 from ctypes import byref, c_bool, c_char, c_double, c_int, c_ubyte, c_uint
 
+from .capability_registry import DeviceEnumInfo
 from .errors import DigilentNotFoundError, DigilentTransportError
 
 # ---------------------------------------------------------------------------
@@ -26,6 +27,21 @@ _lib_error: str | None = None
 
 HDWF_NONE = c_int(-1)
 HDWF = c_int
+
+# ---------------------------------------------------------------------------
+# FDwfEnumConfigInfo DECI type constants (WaveForms SDK §14)
+# ---------------------------------------------------------------------------
+
+DECI_ANALOG_IN_CHANNEL_COUNT = 1
+DECI_ANALOG_OUT_CHANNEL_COUNT = 2
+DECI_ANALOG_IO_CHANNEL_COUNT = 3
+DECI_DIGITAL_IN_CHANNEL_COUNT = 4
+DECI_DIGITAL_OUT_CHANNEL_COUNT = 5
+DECI_DIGITAL_IO_CHANNEL_COUNT = 6
+DECI_ANALOG_IN_BUFFER_SIZE = 7
+DECI_ANALOG_OUT_BUFFER_SIZE = 8
+DECI_DIGITAL_IN_BUFFER_SIZE = 9
+DECI_DIGITAL_OUT_BUFFER_SIZE = 10
 
 _ACQMODE_SINGLE = c_int(1)
 _TRIGSRC_NONE = c_int(0)
@@ -126,6 +142,72 @@ def get_device_name(idx: int) -> str:
     buf = (c_char * 32)()
     _check(lib.FDwfEnumDeviceName(c_int(idx), buf), "FDwfEnumDeviceName")
     return buf.value.decode("utf-8", errors="replace").strip()
+
+
+def get_device_type(idx: int) -> tuple[int, int]:
+    """Return (devid, devver) for the device at enumeration index *idx*."""
+    lib = _load_lib()
+    devid, devver = c_int(), c_int()
+    _check(lib.FDwfEnumDeviceType(c_int(idx), byref(devid), byref(devver)), "FDwfEnumDeviceType")
+    return devid.value, devver.value
+
+
+def get_device_sn(idx: int) -> str:
+    """Return the serial-number string for the device at enumeration index *idx*."""
+    lib = _load_lib()
+    buf = (c_char * 32)()
+    _check(lib.FDwfEnumSN(c_int(idx), buf), "FDwfEnumSN")
+    return buf.value.decode("utf-8", errors="replace").strip()
+
+
+def get_device_is_opened(idx: int) -> bool:
+    """Return True if the device at *idx* is already opened by another process."""
+    lib = _load_lib()
+    is_open = c_int()
+    _check(lib.FDwfEnumDeviceIsOpened(c_int(idx), byref(is_open)), "FDwfEnumDeviceIsOpened")
+    return bool(is_open.value)
+
+
+def get_enum_config_count(device_idx: int) -> int:
+    """Return the number of configurations available for the device at *device_idx*."""
+    lib = _load_lib()
+    count = c_int()
+    _check(lib.FDwfEnumConfig(c_int(device_idx), byref(count)), "FDwfEnumConfig")
+    return count.value
+
+
+def get_enum_config_info(device_idx: int, cfg_idx: int, info_type: int) -> int:
+    """Return one DECI_* value for configuration *cfg_idx* of device *device_idx*."""
+    lib = _load_lib()
+    val = c_int()
+    _check(
+        lib.FDwfEnumConfigInfo(c_int(cfg_idx), c_int(info_type), byref(val)),
+        "FDwfEnumConfigInfo",
+    )
+    return val.value
+
+
+def enumerate_devices_full() -> list[DeviceEnumInfo]:
+    """Call FDwfEnum and return a DeviceEnumInfo for every discovered device."""
+    lib = _load_lib()
+    count = c_int()
+    _check(lib.FDwfEnum(_ENUMFILTER_ALL, byref(count)), "FDwfEnum")
+
+    devices: list[DeviceEnumInfo] = []
+    for idx in range(count.value):
+        devid, devver = get_device_type(idx)
+        name = get_device_name(idx)
+        sn = get_device_sn(idx)
+        is_open = get_device_is_opened(idx)
+        devices.append(DeviceEnumInfo(
+            idx=idx,
+            devid=devid,
+            devver=devver,
+            name=name,
+            sn=sn,
+            is_open=is_open,
+        ))
+    return devices
 
 
 def open_device(idx: int = -1) -> c_int:

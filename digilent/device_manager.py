@@ -12,11 +12,13 @@ States:
 from __future__ import annotations
 
 import contextlib
+import copy
 import ctypes
 import threading
 import time
 from dataclasses import dataclass, field
 
+from . import capability_registry
 from . import dwf_adapter as dwf
 from .errors import (
     DigilentBusyError,
@@ -54,6 +56,7 @@ class DeviceManager:
         self._state = STATE_ABSENT
         self._hdwf = dwf.HDWF_NONE
         self._info = DeviceInfo()
+        self._capability: capability_registry.CapabilityRecord | None = None
         self._error_msg: str | None = None
         self._open_count = 0
 
@@ -77,6 +80,10 @@ class DeviceManager:
     def is_open(self) -> bool:
         return self._hdwf.value != dwf.HDWF_NONE.value
 
+    @property
+    def capability(self) -> capability_registry.CapabilityRecord | None:
+        return self._capability
+
     def status_dict(self) -> dict:
         """Return a serialisable status snapshot."""
         return {
@@ -86,7 +93,7 @@ class DeviceManager:
             "device_name": self._info.name or None,
             "state": self._state,
             "temperature_c": self._info.temperature_c,
-            "capabilities": self._info.capabilities,
+            "capabilities": self._capability.to_dict() if self._capability else {},
             "error": self._error_msg,
         }
 
@@ -117,15 +124,29 @@ class DeviceManager:
     def _do_open(self) -> None:
         """Internal open — must be called with self._lock held."""
         try:
-            count = dwf.enumerate_devices()
-            if count == 0:
+            devices = dwf.enumerate_devices_full()
+            if not devices:
                 self._state = STATE_ABSENT
                 self._hdwf = dwf.HDWF_NONE
                 return
 
-            self._hdwf = dwf.open_device(-1)
-            self._info.name = dwf.get_device_name(0)
+            # Select first non-open device (-1 lets SDK pick, but we want to know devid)
+            target = next((d for d in devices if not d.is_open), None)
+            if target is None:
+                raise DigilentNotFoundError(
+                    "All WaveForms devices are in use by another process"
+                )
+
+            self._hdwf = dwf.open_device(target.idx)
+            self._info.name = target.name
             self._info.temperature_c = dwf.read_temperature(self._hdwf)
+
+            # Build capability from static registry, then refine with runtime config info
+            cap = capability_registry.get_capability(target.devid)
+            cap.name = target.name   # use name exactly as reported by SDK
+            self._apply_config_overrides(cap, target.idx)
+            self._capability = cap
+
             self._state = STATE_IDLE
             self._error_msg = None
             self._open_count += 1
@@ -137,12 +158,46 @@ class DeviceManager:
             self._error_msg = str(exc)
             self._hdwf = dwf.HDWF_NONE
 
+    def _apply_config_overrides(
+        self,
+        cap: capability_registry.CapabilityRecord,
+        device_idx: int,
+    ) -> None:
+        """Override static channel counts with values reported by FDwfEnumConfigInfo."""
+        try:
+            n_cfg = dwf.get_enum_config_count(device_idx)
+        except Exception:
+            return  # FDwfEnumConfig not supported — keep static defaults
+
+        if n_cfg == 0:
+            return
+
+        cfg_idx = 0  # use first (default) configuration
+        _overrides = [
+            (dwf.DECI_ANALOG_IN_CHANNEL_COUNT,  "analog_in_ch"),
+            (dwf.DECI_ANALOG_OUT_CHANNEL_COUNT, "analog_out_ch"),
+            (dwf.DECI_ANALOG_IO_CHANNEL_COUNT,  "analog_io_ch"),
+            (dwf.DECI_DIGITAL_IN_CHANNEL_COUNT,  "digital_in_ch"),
+            (dwf.DECI_DIGITAL_OUT_CHANNEL_COUNT, "digital_out_ch"),
+            (dwf.DECI_DIGITAL_IO_CHANNEL_COUNT,  "digital_io_ch"),
+            (dwf.DECI_ANALOG_IN_BUFFER_SIZE,    "max_scope_buffer"),
+            (dwf.DECI_DIGITAL_IN_BUFFER_SIZE,   "max_logic_buffer"),
+        ]
+        for deci_type, attr in _overrides:
+            try:
+                val = dwf.get_enum_config_info(device_idx, cfg_idx, deci_type)
+                if val > 0:
+                    setattr(cap, attr, val)
+            except Exception:
+                pass  # individual DECI query failed — keep static default
+
     def _do_close(self) -> None:
         """Internal close — must be called with self._lock held."""
         if self.is_open:
             dwf.close_device(self._hdwf)
         self._hdwf = dwf.HDWF_NONE
         self._info = DeviceInfo()
+        self._capability = None
         if self._state not in (STATE_ERROR,):
             self._state = STATE_ABSENT
 
