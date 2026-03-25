@@ -24,20 +24,44 @@ from datetime import datetime, timezone
 
 from .config import DigilentConfig, load_config
 from .device_manager import DeviceManager
+from .digital_io_service import DigitalIOService
 from .errors import DigilentBusyError, DigilentConfigInvalidError, DigilentError, DigilentNotFoundError, DigilentTransportError
+from .impedance_service import ImpedanceService
 from .logic_service import LogicService
 from .models import (
     BasicMeasureRequest,
+    CanConfigureRequest,
+    CanReceiveRequest,
+    CanSendRequest,
+    DigitalIOConfigureRequest,
+    DigitalIOWriteRequest,
+    I2cConfigureRequest,
+    I2cReadRequest,
+    I2cWriteReadRequest,
+    I2cWriteRequest,
+    ImpedanceCompensationRequest,
+    ImpedanceConfigureRequest,
+    ImpedanceMeasureRequest,
+    ImpedanceSweepRequest,
     LogicCaptureRequest,
+    PatternSetRequest,
+    PatternStopRequest,
     ScopeCaptureRequest,
     ScopeSampleRequest,
+    SpiConfigureRequest,
+    SpiTransferRequest,
     StaticIoRequest,
     SuppliesMasterRequest,
     SuppliesRequest,
     SuppliesSetRequest,
+    UartConfigureRequest,
+    UartReceiveRequest,
+    UartSendRequest,
     WavegenRequest,
 )
 from .orchestration import OrchestrationService
+from .pattern_service import PatternService
+from .protocol_service import ProtocolService
 from .scope_service import ScopeService
 from .supplies_service import StaticIoService, SuppliesService
 from .wavegen_service import WavegenService
@@ -51,12 +75,17 @@ _logic: LogicService | None = None
 _wavegen: WavegenService | None = None
 _supplies: SuppliesService | None = None
 _static_io: StaticIoService | None = None
+_digital_io: DigitalIOService | None = None
+_pattern: PatternService | None = None
+_impedance: ImpedanceService | None = None
+_protocol: ProtocolService | None = None
 _orchestration: OrchestrationService | None = None
 
 
 def _setup_services(cfg: DigilentConfig) -> None:
     """Initialise all service objects from a config."""
-    global _config, _manager, _scope, _logic, _wavegen, _supplies, _static_io, _orchestration
+    global _config, _manager, _scope, _logic, _wavegen, _supplies, _static_io
+    global _digital_io, _pattern, _impedance, _protocol, _orchestration
     _config = cfg
     _manager = DeviceManager()
     _scope = ScopeService(_manager, _config)
@@ -64,6 +93,10 @@ def _setup_services(cfg: DigilentConfig) -> None:
     _wavegen = WavegenService(_manager, _config)
     _supplies = SuppliesService(_manager, _config)
     _static_io = StaticIoService(_manager, _config)
+    _digital_io = DigitalIOService(_manager, _config)
+    _pattern = PatternService(_manager, _config)
+    _impedance = ImpedanceService(_manager, _config)
+    _protocol = ProtocolService(_manager, _config)
     _orchestration = OrchestrationService(_manager, _config)
 
 
@@ -117,6 +150,8 @@ def handle_get(handler, path: str) -> None:
         _h_supplies_info(handler)
     elif path == "/api/digilent/supplies/status":
         _h_supplies_status(handler)
+    elif path == "/api/digilent/digital-io/read":
+        _h_digital_io_read(handler)
     else:
         _not_found(handler, path)
 
@@ -134,6 +169,26 @@ def handle_post(handler, path: str) -> None:
         "/api/digilent/supplies/set": _h_supplies_set,
         "/api/digilent/supplies/master": _h_supplies_master,
         "/api/digilent/static-io/set": _h_static_io_set,
+        "/api/digilent/digital-io/configure": _h_digital_io_configure,
+        "/api/digilent/digital-io/write": _h_digital_io_write,
+        "/api/digilent/pattern/set": _h_pattern_set,
+        "/api/digilent/pattern/stop": _h_pattern_stop,
+        "/api/digilent/impedance/configure": _h_impedance_configure,
+        "/api/digilent/impedance/measure": _h_impedance_measure,
+        "/api/digilent/impedance/sweep": _h_impedance_sweep,
+        "/api/digilent/impedance/compensation": _h_impedance_compensation,
+        "/api/digilent/protocol/uart/configure": _h_uart_configure,
+        "/api/digilent/protocol/uart/send": _h_uart_send,
+        "/api/digilent/protocol/uart/receive": _h_uart_receive,
+        "/api/digilent/protocol/spi/configure": _h_spi_configure,
+        "/api/digilent/protocol/spi/transfer": _h_spi_transfer,
+        "/api/digilent/protocol/i2c/configure": _h_i2c_configure,
+        "/api/digilent/protocol/i2c/write": _h_i2c_write,
+        "/api/digilent/protocol/i2c/read": _h_i2c_read,
+        "/api/digilent/protocol/i2c/write-read": _h_i2c_write_read,
+        "/api/digilent/protocol/can/configure": _h_can_configure,
+        "/api/digilent/protocol/can/send": _h_can_send,
+        "/api/digilent/protocol/can/receive": _h_can_receive,
         "/api/digilent/measure/basic": _h_measure_basic,
         "/api/digilent/session/reset": _h_session_reset,
     }
@@ -362,3 +417,177 @@ def _h_session_reset(handler) -> None:
         _manager.reset_session()
         return {"ok": True, "ts": _ts(), "message": "Session reset — device closed"}
     _run(handler, _reset)
+
+
+# ---------------------------------------------------------------------------
+# Digital I/O handlers
+# ---------------------------------------------------------------------------
+
+def _h_digital_io_read(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    _run(handler, _digital_io.read)
+
+
+def _h_digital_io_configure(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = DigitalIOConfigureRequest.from_dict(handler._read_json() or {})
+    _run(handler, _digital_io.configure, req)
+
+
+def _h_digital_io_write(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = DigitalIOWriteRequest.from_dict(handler._read_json() or {})
+    _run(handler, _digital_io.write, req)
+
+
+# ---------------------------------------------------------------------------
+# Pattern Generator handlers
+# ---------------------------------------------------------------------------
+
+def _h_pattern_set(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = PatternSetRequest.from_dict(handler._read_json() or {})
+    _run(handler, _pattern.set, req)
+
+
+def _h_pattern_stop(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = PatternStopRequest.from_dict(handler._read_json() or {})
+    _run(handler, _pattern.stop, req)
+
+
+# ---------------------------------------------------------------------------
+# Impedance Analyzer handlers
+# ---------------------------------------------------------------------------
+
+def _h_impedance_configure(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = ImpedanceConfigureRequest.from_dict(handler._read_json() or {})
+    _run(handler, _impedance.configure, req)
+
+
+def _h_impedance_measure(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = ImpedanceMeasureRequest.from_dict(handler._read_json() or {})
+    _run(handler, _impedance.measure, req)
+
+
+def _h_impedance_sweep(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = ImpedanceSweepRequest.from_dict(handler._read_json() or {})
+    _run(handler, _impedance.sweep, req)
+
+
+def _h_impedance_compensation(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = ImpedanceCompensationRequest.from_dict(handler._read_json() or {})
+    _run(handler, _impedance.set_compensation, req)
+
+
+# ---------------------------------------------------------------------------
+# Protocol handlers — UART
+# ---------------------------------------------------------------------------
+
+def _h_uart_configure(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = UartConfigureRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.uart_configure, req)
+
+
+def _h_uart_send(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = UartSendRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.uart_send, req)
+
+
+def _h_uart_receive(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = UartReceiveRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.uart_receive, req)
+
+
+# ---------------------------------------------------------------------------
+# Protocol handlers — SPI
+# ---------------------------------------------------------------------------
+
+def _h_spi_configure(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = SpiConfigureRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.spi_configure, req)
+
+
+def _h_spi_transfer(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = SpiTransferRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.spi_transfer, req)
+
+
+# ---------------------------------------------------------------------------
+# Protocol handlers — I2C
+# ---------------------------------------------------------------------------
+
+def _h_i2c_configure(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = I2cConfigureRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.i2c_configure, req)
+
+
+def _h_i2c_write(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = I2cWriteRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.i2c_write, req)
+
+
+def _h_i2c_read(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = I2cReadRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.i2c_read, req)
+
+
+def _h_i2c_write_read(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = I2cWriteReadRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.i2c_write_read, req)
+
+
+# ---------------------------------------------------------------------------
+# Protocol handlers — CAN
+# ---------------------------------------------------------------------------
+
+def _h_can_configure(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = CanConfigureRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.can_configure, req)
+
+
+def _h_can_send(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = CanSendRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.can_send, req)
+
+
+def _h_can_receive(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = CanReceiveRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.can_receive, req)

@@ -644,3 +644,403 @@ def is_available() -> bool:
         return True
     except DigilentTransportError:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Digital I/O (DigitalIO) — bit-bang static pins
+# ---------------------------------------------------------------------------
+
+def digital_io_configure(hdwf: c_int, enable_mask: int, output_value: int) -> None:
+    """Set output-enable mask, initial output value, and apply via FDwfDigitalIOConfigure."""
+    lib = _load_lib()
+    _check(lib.FDwfDigitalIOOutputEnableSet(hdwf, c_uint(enable_mask)), "IOOutputEnableSet")
+    _check(lib.FDwfDigitalIOOutputSet(hdwf, c_uint(output_value)), "IOOutputSet")
+    _check(lib.FDwfDigitalIOConfigure(hdwf), "IOConfigure")
+
+
+def digital_io_read(hdwf: c_int) -> int:
+    """Update monitor and return input word (FDwfDigitalIOStatus + FDwfDigitalIOInputStatus)."""
+    lib = _load_lib()
+    _check(lib.FDwfDigitalIOStatus(hdwf), "IOStatus")
+    word = c_uint()
+    _check(lib.FDwfDigitalIOInputStatus(hdwf, byref(word)), "IOInputStatus")
+    return word.value
+
+
+def digital_io_output_get(hdwf: c_int) -> int:
+    """Return current output register value (FDwfDigitalIOOutputGet)."""
+    lib = _load_lib()
+    word = c_uint()
+    _check(lib.FDwfDigitalIOOutputGet(hdwf, byref(word)), "IOOutputGet")
+    return word.value
+
+
+def digital_io_write(hdwf: c_int, value: int, mask: int) -> None:
+    """Read-modify-write the output register, updating only the masked bits."""
+    current = digital_io_output_get(hdwf)
+    new_val = (current & ~mask) | (value & mask)
+    lib = _load_lib()
+    _check(lib.FDwfDigitalIOOutputSet(hdwf, c_uint(new_val)), "IOOutputSet")
+    _check(lib.FDwfDigitalIOConfigure(hdwf), "IOConfigure")
+
+
+# ---------------------------------------------------------------------------
+# Pattern Generator (DigitalOut)
+# ---------------------------------------------------------------------------
+
+_DIGOUT_TYPE_PULSE = c_int(0)
+_DIGOUT_TYPE_CUSTOM = c_int(1)
+_DIGOUT_TYPE_RANDOM = c_int(2)
+_DIGOUT_TYPE_MAP: dict[str, c_int] = {
+    "pulse": _DIGOUT_TYPE_PULSE,
+    "custom": _DIGOUT_TYPE_CUSTOM,
+    "bfs": _DIGOUT_TYPE_CUSTOM,
+    "random": _DIGOUT_TYPE_RANDOM,
+}
+
+_DIGOUT_IDLE_INIT = c_int(0)    # initial value
+_DIGOUT_IDLE_LOW = c_int(1)
+_DIGOUT_IDLE_HIGH = c_int(2)
+_DIGOUT_IDLE_ZET = c_int(3)     # high-Z
+_DIGOUT_IDLE_MAP: dict[str, c_int] = {
+    "initial": _DIGOUT_IDLE_INIT,
+    "low": _DIGOUT_IDLE_LOW,
+    "high": _DIGOUT_IDLE_HIGH,
+    "zstate": _DIGOUT_IDLE_ZET,
+}
+
+
+def pattern_get_system_freq(hdwf: c_int) -> float:
+    """Return the DigitalOut master clock frequency (Hz)."""
+    lib = _load_lib()
+    freq = c_double()
+    _check(lib.FDwfDigitalOutInternalClockInfo(hdwf, byref(freq)), "DigOutInternalClockInfo")
+    return freq.value
+
+
+def pattern_configure_channel(
+    hdwf: c_int,
+    channel: int,
+    type_str: str,
+    divider: int,
+    low_count: int,
+    high_count: int,
+    idle_str: str,
+    custom_data: str = "",
+) -> None:
+    """Configure one DigitalOut channel (does not start output)."""
+    lib = _load_lib()
+    idx = c_int(channel)
+    _check(lib.FDwfDigitalOutEnableSet(hdwf, idx, c_int(1)), "DigOutEnableSet")
+    type_val = _DIGOUT_TYPE_MAP.get(type_str, _DIGOUT_TYPE_PULSE)
+    _check(lib.FDwfDigitalOutTypeSet(hdwf, idx, type_val), "DigOutTypeSet")
+    idle_val = _DIGOUT_IDLE_MAP.get(idle_str, _DIGOUT_IDLE_LOW)
+    _check(lib.FDwfDigitalOutIdleSet(hdwf, idx, idle_val), "DigOutIdleSet")
+    _check(lib.FDwfDigitalOutDividerSet(hdwf, idx, c_uint(divider)), "DigOutDividerSet")
+    _check(lib.FDwfDigitalOutCounterSet(hdwf, idx, c_uint(low_count), c_uint(high_count)), "DigOutCounterSet")
+    if type_str in ("custom", "bfs") and custom_data:
+        hex_str = custom_data.replace("0x", "").replace(" ", "")
+        data_bytes = bytes.fromhex(hex_str)
+        n_bits = len(data_bytes) * 8
+        buf = (c_ubyte * len(data_bytes))(*data_bytes)
+        _check(lib.FDwfDigitalOutDataSet(hdwf, idx, buf, c_uint(n_bits)), "DigOutDataSet")
+
+
+def pattern_run_set(hdwf: c_int, run_s: float) -> None:
+    lib = _load_lib()
+    _check(lib.FDwfDigitalOutRunSet(hdwf, c_double(run_s)), "DigOutRunSet")
+
+
+def pattern_repeat_set(hdwf: c_int, repeat: int) -> None:
+    lib = _load_lib()
+    _check(lib.FDwfDigitalOutRepeatSet(hdwf, c_uint(repeat)), "DigOutRepeatSet")
+
+
+def pattern_start(hdwf: c_int) -> None:
+    lib = _load_lib()
+    _check(lib.FDwfDigitalOutConfigure(hdwf, c_int(1)), "DigOutConfigure(start)")
+
+
+def pattern_stop(hdwf: c_int) -> None:
+    lib = _load_lib()
+    _check(lib.FDwfDigitalOutConfigure(hdwf, c_int(0)), "DigOutConfigure(stop)")
+
+
+def pattern_channel_disable(hdwf: c_int, channel: int) -> None:
+    lib = _load_lib()
+    _check(lib.FDwfDigitalOutEnableSet(hdwf, c_int(channel), c_int(0)), "DigOutEnableSet(disable)")
+
+
+# ---------------------------------------------------------------------------
+# Impedance Analyzer (AnalogImpedance)
+# ---------------------------------------------------------------------------
+
+# DwfAnalogImpedance measurement enum values (WaveForms SDK)
+IMP_MEASUREMENT_MAP: dict[str, int] = {
+    "Impedance": 0,
+    "ImpedancePhase": 1,
+    "Resistance": 2,
+    "Reactance": 3,
+    "Admittance": 4,
+    "AdmittancePhase": 5,
+    "Conductance": 6,
+    "Susceptance": 7,
+    "SeriesCapacitance": 8,
+    "ParallelCapacitance": 9,
+    "SeriesInductance": 10,
+    "ParallelInductance": 11,
+    "Dissipation": 12,
+    "Quality": 13,
+}
+
+
+def impedance_configure(
+    hdwf: c_int,
+    frequency_hz: float,
+    amplitude_v: float,
+    offset_v: float,
+    probe_resistance_ohm: float,
+    probe_capacitance_f: float,
+    min_periods: int,
+) -> None:
+    lib = _load_lib()
+    _check(lib.FDwfAnalogImpedanceReset(hdwf), "ImpedanceReset")
+    _check(lib.FDwfAnalogImpedanceFrequencySet(hdwf, c_double(frequency_hz)), "ImpedanceFrequencySet")
+    _check(lib.FDwfAnalogImpedanceAmplitudeSet(hdwf, c_double(amplitude_v)), "ImpedanceAmplitudeSet")
+    _check(lib.FDwfAnalogImpedanceOffsetSet(hdwf, c_double(offset_v)), "ImpedanceOffsetSet")
+    _check(
+        lib.FDwfAnalogImpedanceProbeSet(hdwf, c_double(probe_resistance_ohm), c_double(probe_capacitance_f)),
+        "ImpedanceProbeSet",
+    )
+    _check(lib.FDwfAnalogImpedancePeriodSet(hdwf, c_int(min_periods)), "ImpedancePeriodSet")
+
+
+def impedance_set_frequency(hdwf: c_int, frequency_hz: float) -> None:
+    lib = _load_lib()
+    _check(lib.FDwfAnalogImpedanceFrequencySet(hdwf, c_double(frequency_hz)), "ImpedanceFrequencySet")
+
+
+def impedance_measure(hdwf: c_int, measurement_names: list[str], timeout_s: float = 5.0) -> dict[str, float]:
+    """Start one impedance acquisition, poll until done, return requested measurements."""
+    import time as _time
+    lib = _load_lib()
+    _check(lib.FDwfAnalogImpedanceConfigure(hdwf, c_int(1)), "ImpedanceConfigure(start)")
+    deadline = _time.monotonic() + timeout_s
+    sts = c_ubyte()
+    while _time.monotonic() < deadline:
+        _check(lib.FDwfAnalogImpedanceStatus(hdwf, byref(sts)), "ImpedanceStatus")
+        if sts.value == _STATE_DONE.value:
+            break
+        _time.sleep(0.005)
+    else:
+        lib.FDwfAnalogImpedanceConfigure(hdwf, c_int(0))
+        from .errors import DigilentCaptureTimeoutError
+        raise DigilentCaptureTimeoutError("Impedance measurement timed out")
+    result: dict[str, float] = {}
+    for name in measurement_names:
+        idx = IMP_MEASUREMENT_MAP.get(name)
+        if idx is None:
+            continue
+        val = c_double()
+        _check(
+            lib.FDwfAnalogImpedanceStatusMeasure(hdwf, c_int(idx), byref(val)),
+            f"ImpedanceStatusMeasure({name})",
+        )
+        result[name] = val.value
+    return result
+
+
+def impedance_stop(hdwf: c_int) -> None:
+    lib = _load_lib()
+    lib.FDwfAnalogImpedanceConfigure(hdwf, c_int(0))
+
+
+def impedance_set_compensation(
+    hdwf: c_int,
+    open_r: float,
+    open_x: float,
+    short_r: float,
+    short_x: float,
+) -> None:
+    lib = _load_lib()
+    _check(
+        lib.FDwfAnalogImpedanceCompSet(
+            hdwf, c_double(open_r), c_double(open_x), c_double(short_r), c_double(short_x),
+        ),
+        "ImpedanceCompSet",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Digital Protocols — UART, SPI, I2C, CAN
+# ---------------------------------------------------------------------------
+
+_UART_PARITY_MAP: dict[str, int] = {
+    "none": 0, "odd": 1, "even": 2, "mark": 3, "space": 4,
+}
+
+
+def uart_configure(
+    hdwf: c_int,
+    baud_rate: int,
+    bits: int,
+    parity: str,
+    stop_bits: float,
+    tx_ch: int,
+    rx_ch: int,
+    polarity: int,
+) -> None:
+    lib = _load_lib()
+    _check(lib.FDwfDigitalUartReset(hdwf), "UartReset")
+    _check(lib.FDwfDigitalUartRateSet(hdwf, c_double(baud_rate)), "UartRateSet")
+    _check(lib.FDwfDigitalUartBitsSet(hdwf, c_int(bits)), "UartBitsSet")
+    _check(lib.FDwfDigitalUartParitySet(hdwf, c_int(_UART_PARITY_MAP.get(parity, 0))), "UartParitySet")
+    _check(lib.FDwfDigitalUartStopSet(hdwf, c_double(stop_bits)), "UartStopSet")
+    _check(lib.FDwfDigitalUartTxSet(hdwf, c_int(tx_ch)), "UartTxSet")
+    _check(lib.FDwfDigitalUartRxSet(hdwf, c_int(rx_ch)), "UartRxSet")
+    _check(lib.FDwfDigitalUartPolaritySet(hdwf, c_int(polarity)), "UartPolaritySet")
+
+
+def uart_send(hdwf: c_int, data: bytes) -> None:
+    lib = _load_lib()
+    buf = (c_ubyte * len(data))(*data)
+    _check(lib.FDwfDigitalUartTx(hdwf, buf, c_int(len(data))), "UartTx")
+
+
+def uart_receive(hdwf: c_int, max_bytes: int) -> tuple[bytes, int]:
+    """Return (data, parity_error_count). parity>0 means errors detected."""
+    lib = _load_lib()
+    buf = (c_ubyte * max_bytes)()
+    cb_read = c_int()
+    parity = c_int()
+    _check(
+        lib.FDwfDigitalUartRx(hdwf, buf, c_int(max_bytes), byref(cb_read), byref(parity)),
+        "UartRx",
+    )
+    return bytes(buf[:cb_read.value]), parity.value
+
+
+def spi_configure(
+    hdwf: c_int,
+    freq_hz: float,
+    mode: int,
+    clk_ch: int,
+    mosi_ch: int,
+    miso_ch: int,
+    cs_ch: int,
+    cs_idle: int,
+    order: str,
+    duty_pct: float,
+) -> None:
+    lib = _load_lib()
+    _check(lib.FDwfDigitalSpiReset(hdwf), "SpiReset")
+    _check(lib.FDwfDigitalSpiFrequencySet(hdwf, c_double(freq_hz)), "SpiFrequencySet")
+    _check(lib.FDwfDigitalSpiClockSet(hdwf, c_int(clk_ch)), "SpiClockSet")
+    _check(lib.FDwfDigitalSpiDataSet(hdwf, c_int(0), c_int(mosi_ch)), "SpiDataSet(MOSI)")
+    _check(lib.FDwfDigitalSpiDataSet(hdwf, c_int(1), c_int(miso_ch)), "SpiDataSet(MISO)")
+    _check(lib.FDwfDigitalSpiModeSet(hdwf, c_int(mode)), "SpiModeSet")
+    _check(lib.FDwfDigitalSpiOrderSet(hdwf, c_int(1 if order == "msb" else 0)), "SpiOrderSet")
+    _check(lib.FDwfDigitalSpiSelectSet(hdwf, c_int(cs_ch), c_int(cs_idle)), "SpiSelectSet")
+    _check(lib.FDwfDigitalSpiDutySet(hdwf, c_double(duty_pct / 100.0)), "SpiDutySet")
+
+
+def spi_transfer(hdwf: c_int, tx_data: bytes, rx_len: int) -> bytes:
+    lib = _load_lib()
+    tx_len = len(tx_data)
+    total = max(tx_len, rx_len)
+    tx_buf = (c_ubyte * total)(*tx_data, *([0] * (total - tx_len)))
+    rx_buf = (c_ubyte * total)()
+    _check(
+        lib.FDwfDigitalSpiWriteRead(hdwf, c_int(2), c_int(8), tx_buf, c_int(tx_len), rx_buf, c_int(rx_len)),
+        "SpiWriteRead",
+    )
+    return bytes(rx_buf[:rx_len])
+
+
+def i2c_configure(hdwf: c_int, rate_hz: float, scl_ch: int, sda_ch: int) -> None:
+    lib = _load_lib()
+    _check(lib.FDwfDigitalI2cReset(hdwf), "I2cReset")
+    _check(lib.FDwfDigitalI2cRateSet(hdwf, c_double(rate_hz)), "I2cRateSet")
+    _check(lib.FDwfDigitalI2cSclSet(hdwf, c_int(scl_ch)), "I2cSclSet")
+    _check(lib.FDwfDigitalI2cSdaSet(hdwf, c_int(sda_ch)), "I2cSdaSet")
+
+
+def i2c_write(hdwf: c_int, address: int, data: bytes) -> int:
+    """Write to I2C address. Returns NAK count (0 = success)."""
+    lib = _load_lib()
+    buf = (c_ubyte * len(data))(*data) if data else (c_ubyte * 1)()
+    nak = c_int()
+    _check(
+        lib.FDwfDigitalI2cWrite(hdwf, c_int(address), buf, c_int(len(data)), byref(nak)),
+        "I2cWrite",
+    )
+    return nak.value
+
+
+def i2c_read(hdwf: c_int, address: int, length: int) -> tuple[bytes, int]:
+    """Read from I2C address. Returns (data, nak_count)."""
+    lib = _load_lib()
+    buf = (c_ubyte * length)()
+    nak = c_int()
+    _check(
+        lib.FDwfDigitalI2cRead(hdwf, c_int(address), buf, c_int(length), byref(nak)),
+        "I2cRead",
+    )
+    return bytes(buf), nak.value
+
+
+def i2c_write_read(hdwf: c_int, address: int, tx: bytes, rx_len: int) -> tuple[bytes, int]:
+    """Combined write+read. Returns (rx_data, nak_count)."""
+    lib = _load_lib()
+    tx_buf = (c_ubyte * len(tx))(*tx) if tx else (c_ubyte * 1)()
+    rx_buf = (c_ubyte * rx_len)()
+    nak = c_int()
+    _check(
+        lib.FDwfDigitalI2cWriteRead(
+            hdwf, c_int(address),
+            tx_buf, c_int(len(tx)),
+            rx_buf, c_int(rx_len),
+            byref(nak),
+        ),
+        "I2cWriteRead",
+    )
+    return bytes(rx_buf), nak.value
+
+
+def can_configure(hdwf: c_int, rate_hz: float, tx_ch: int, rx_ch: int) -> None:
+    lib = _load_lib()
+    _check(lib.FDwfDigitalCanReset(hdwf), "CanReset")
+    _check(lib.FDwfDigitalCanRateSet(hdwf, c_double(rate_hz)), "CanRateSet")
+    _check(lib.FDwfDigitalCanTxSet(hdwf, c_int(tx_ch)), "CanTxSet")
+    _check(lib.FDwfDigitalCanRxSet(hdwf, c_int(rx_ch)), "CanRxSet")
+
+
+def can_send(hdwf: c_int, can_id: int, data: bytes, extended: bool, remote: bool) -> None:
+    lib = _load_lib()
+    buf = (c_ubyte * len(data))(*data) if data else (c_ubyte * 1)()
+    _check(
+        lib.FDwfDigitalCanTx(
+            hdwf, c_int(can_id), c_int(1 if extended else 0),
+            c_int(1 if remote else 0), c_int(len(data)), buf,
+        ),
+        "CanTx",
+    )
+
+
+def can_receive(hdwf: c_int) -> tuple[int, bytes, bool, bool, int]:
+    """Non-blocking read. Returns (id, data, extended, remote, status). status 0 = no data yet."""
+    lib = _load_lib()
+    can_id = c_int()
+    extended = c_int()
+    remote = c_int()
+    dlc = c_int()
+    buf = (c_ubyte * 8)()
+    status = c_int()
+    _check(
+        lib.FDwfDigitalCanRx(
+            hdwf, byref(can_id), byref(extended), byref(remote),
+            byref(dlc), buf, c_int(8), byref(status),
+        ),
+        "CanRx",
+    )
+    return can_id.value, bytes(buf[:dlc.value]), bool(extended.value), bool(remote.value), status.value
