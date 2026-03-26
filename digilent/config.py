@@ -26,8 +26,10 @@ class SafeLimits:
     max_scope_sample_rate_hz: int = 50_000_000
     max_logic_sample_rate_hz: int = 100_000_000
     max_wavegen_amplitude_v: float = 5.0
+    max_wavegen_offset_v: float = 5.0
     max_supply_plus_v: float = 5.0
     min_supply_minus_v: float = -5.0
+    max_impedance_sweep_amplitude_v: float = 1.0
 
 
 @dataclass

@@ -229,3 +229,88 @@ The relative path works when all three files sit in the same directory.
 | `matplotlib not installed` | Missing dependency | `pip install matplotlib` |
 | PNG is blank / all zero | Wavegen not running at capture time | Start wavegen, add `sleep 0.1`, then capture |
 | Rise/fall time shows `2e-4` for a 5 kHz square wave | Too-low sample rate (only ~1 edge captured) | Increase `sample_rate_hz` to ≥ 1 MS/s for accurate edge timing |
+
+---
+
+## Impedance Sweep Tool (`impedance_sweep.py`)
+
+`tools/impedance_sweep.py` extends the analysis workflow to the impedance
+analyzer. It calls `POST /impedance/sweep` and produces `.csv`, `.png`, and
+`.md` output files in the same style as `plot_waveform.py`.
+
+### Workflow
+
+```
+POST /impedance/sweep
+        │
+        ▼
+   sweep response (frequencies + named measurement arrays)
+        │
+        ├──► sweep.csv          frequency, impedance, phase, R, X (per step)
+        ├──► sweep.png          two-panel Bode chart (|Z| dBΩ + phase °)
+        └──► sweep.md           DUT classification, estimated value, key metrics
+```
+
+### DUT classifier
+
+The classifier performs a linear regression of log|Z| vs log(f) to estimate
+the impedance slope, then combines with mean phase to identify the DUT:
+
+| Slope | Mean phase | Classification |
+|-------|-----------|----------------|
+| ≈ 0 | ≈ 0° | Resistor |
+| ≈ −1 | ≈ −90° | Capacitor |
+| ≈ +1 | ≈ +90° | Inductor |
+| −0.3 to −0.7 | mixed | RC network |
+| +0.3 to +0.7 | mixed | RL network |
+| other | | Complex / resonant |
+
+For capacitors, the estimated value is `C = 1 / (2π·f_mid·|Z_mid|)`.
+For inductors: `L = |Z_mid| / (2π·f_mid)`. Both are auto-scaled to pF/nF/µF
+or nH/µH/mH as appropriate.
+
+### Extending the plot
+
+To add annotation (e.g. resonant frequency marker) to the Bode chart, edit
+`plot_sweep()` in `tools/impedance_sweep.py`. The function receives:
+- `frequencies` — list of Hz values
+- `impedances` — list of |Z| values in Ω
+- `phases` — list of phase values in °
+- `dut` — dict from `classify_dut()`
+
+---
+
+## Protocol Decode Tool (`protocol_decode.py`)
+
+`tools/protocol_decode.py` captures a digital protocol bus and writes a
+hex+ASCII dump plus a Markdown report with a protocol-specific frame table.
+
+### Workflow
+
+```
+POST /protocol/uart/configure + receive  (or spi/i2c/can equivalent)
+        │
+        ▼
+   capture result (bytes / frames)
+        │
+        ├──► capture.hex    hex+ASCII dump (16 bytes/line, like xxd)
+        └──► capture.md     Markdown report with frame table
+```
+
+### Hex dump format
+
+```
+00000000  48 65 6C 6C 6F 20 57 6F  72 6C 64 0D 0A 00 00 00  |Hello World.....|
+00000010  ...
+```
+
+### Adding a new protocol
+
+To add a new protocol (e.g. SWD on Analog Discovery 3):
+1. Add a new `capture_<protocol>()` function following the pattern in
+   `capture_uart()` — call configure then capture, return a dict with keys:
+   `protocol`, `bytes_received`, `raw`, `frames`, `errors`, `warnings`, `meta`
+2. Add the subcommand parser in `build_parser()`
+3. Register the function in the `CAPTURE_FNS` dict in `main()`
+4. Add a `elif protocol == "SWD":` branch in `write_report()` for the
+   protocol-specific table format

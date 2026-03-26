@@ -49,3 +49,27 @@ class DigilentInternalError(DigilentError):
 
 class DigilentNotEnabledError(DigilentError):
     code = "DIGILENT_NOT_ENABLED"
+
+
+class DigilentNotAvailable(DigilentError):
+    """Instrument or feature not present on the connected device."""
+    code = "DIGILENT_NOT_AVAILABLE"
+    http_status = 405
+
+
+class DigilentSdkError(DigilentError):
+    """libdwf returned an error code that was not handled elsewhere."""
+    code = "DIGILENT_SDK_ERROR"
+    http_status = 500
+
+
+class DigilentProtocolError(DigilentError):
+    """Parity, framing, or ACK failure during a protocol operation."""
+    code = "DIGILENT_PROTOCOL_ERROR"
+    http_status = 422
+
+
+class DigilentSessionLost(DigilentError):
+    """Device disconnected mid-session."""
+    code = "DIGILENT_SESSION_LOST"
+    http_status = 503
