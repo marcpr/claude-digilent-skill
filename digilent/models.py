@@ -495,6 +495,105 @@ class I2cWriteReadRequest:
 
 
 # ---------------------------------------------------------------------------
+# Protocol — I2C Spy (passive sniffer)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class I2cSpyConfigureRequest:
+    """Configure I2C spy mode. Pins are monitored passively — no bus traffic generated."""
+    rate_hz: float = 100_000.0
+    scl_ch: int = 0
+    sda_ch: int = 1
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "I2cSpyConfigureRequest":
+        r = cls()
+        for k, v in d.items():
+            if hasattr(r, k):
+                setattr(r, k, v)
+        return r
+
+
+@dataclass
+class I2cSpyReadRequest:
+    """Collect I2C spy frames for a given duration."""
+    duration_s: float = 1.0
+    max_bytes: int = 256    # per-poll receive buffer
+    max_frames: int = 256   # stop early after this many frames
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "I2cSpyReadRequest":
+        r = cls()
+        for k, v in d.items():
+            if hasattr(r, k):
+                setattr(r, k, v)
+        return r
+
+
+# ---------------------------------------------------------------------------
+# Protocol — Sniff (passive receive)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class UartSniffRequest:
+    """Passively listen on a UART RX line without driving TX."""
+    rx_ch: int = 1
+    baud_rate: int = 9600
+    bits: int = 8
+    parity: str = "none"
+    stop_bits: float = 1.0
+    duration_s: float = 1.0
+    max_bytes: int = 4096
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "UartSniffRequest":
+        r = cls()
+        for k, v in d.items():
+            if hasattr(r, k):
+                setattr(r, k, v)
+        return r
+
+
+@dataclass
+class CanSniffRequest:
+    """Passively receive CAN frames without transmitting."""
+    rx_ch: int = 1
+    rate_hz: float = 500_000.0
+    duration_s: float = 2.0
+    max_frames: int = 64
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CanSniffRequest":
+        r = cls()
+        for k, v in d.items():
+            if hasattr(r, k):
+                setattr(r, k, v)
+        return r
+
+
+@dataclass
+class SpiSniffRequest:
+    """Passively capture SPI bus using logic analyzer + software decode."""
+    clk_ch: int = 0
+    mosi_ch: int = 1
+    miso_ch: int = 2
+    cs_ch: int = 3
+    spi_freq_hz: float = 1_000_000.0
+    mode: int = 0           # SPI mode 0-3 (CPOL/CPHA)
+    order: str = "msb"
+    duration_s: float = 1.0
+    cs_active_low: bool = True
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SpiSniffRequest":
+        r = cls()
+        for k, v in d.items():
+            if hasattr(r, k):
+                setattr(r, k, v)
+        return r
+
+
+# ---------------------------------------------------------------------------
 # Protocol — CAN
 # ---------------------------------------------------------------------------
 

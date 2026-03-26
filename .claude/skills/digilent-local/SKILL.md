@@ -1,16 +1,13 @@
 # Digilent Local Skill
 
 Use this skill when the user wants to use a Digilent Analog Discovery device
-connected **directly via USB to this machine** (not via a Raspberry Pi workbench).
+connected **directly via USB to this machine**.
 
 Trigger on: "scope", "oscilloscope", "logic analyzer", "wavegen", "waveform generator",
 "analog measurement", "PWM messen", "Spannung messen", "digitale Aktivität",
 "digilent", "Analog Discovery", "lokal messen", "measure locally",
 "impedance", "protocol decode", "UART", "SPI", "I2C", "CAN", "pattern generator",
 "digital I/O", "bode plot", "frequency sweep"
-
-Do NOT use this skill when the user explicitly mentions a Raspberry Pi workbench
-— use the `digilent-workbench` skill instead.
 
 ---
 
@@ -105,7 +102,7 @@ curl -s -X POST http://127.0.0.1:7272/api/digilent/device/open
 curl -s -X POST http://127.0.0.1:7272/api/digilent/measure/basic \
   -H "Content-Type: application/json" \
   -d '{
-    "action": "measure_esp32_pwm",
+    "action": "measure_pwm",
     "params": {
       "channel": 1,
       "expected_freq_hz": 1000,
@@ -642,6 +639,51 @@ curl -s -X POST http://127.0.0.1:7272/api/digilent/protocol/can/receive \
 
 CAN data max 8 bytes. `extended: true` for 29-bit IDs.
 
+### Passive Sniff / Spy (non-driving observation)
+
+Use these when you want to observe an existing bus without injecting any signal.
+
+```bash
+# I2C spy — start listening on SCL=DIO0, SDA=DIO1
+curl -s -X POST http://127.0.0.1:7272/api/digilent/protocol/i2c/spy/configure \
+  -H "Content-Type: application/json" \
+  -d '{"rate_hz": 100000, "scl_ch": 0, "sda_ch": 1}'
+
+# Read collected frames (non-blocking poll for 0.5 s)
+curl -s -X POST http://127.0.0.1:7272/api/digilent/protocol/i2c/spy/read \
+  -H "Content-Type: application/json" \
+  -d '{"duration_s": 0.5, "max_frames": 64}'
+```
+
+Response: `{ok, frames[], frame_count, bytes_captured}` — each frame has `start`, `stop`, `data`.
+
+```bash
+# UART sniff (passive RX only)
+curl -s -X POST http://127.0.0.1:7272/api/digilent/protocol/uart/sniff \
+  -H "Content-Type: application/json" \
+  -d '{"rx_ch": 1, "baud_rate": 115200, "parity": "none", "duration_s": 2.0, "max_bytes": 256}'
+```
+
+Response: `{ok, data, bytes_captured, baud_rate}`
+
+```bash
+# CAN sniff (passive capture)
+curl -s -X POST http://127.0.0.1:7272/api/digilent/protocol/can/sniff \
+  -H "Content-Type: application/json" \
+  -d '{"rx_ch": 1, "rate_hz": 500000, "duration_s": 2.0, "max_frames": 32}'
+```
+
+Response: `{ok, frames[], frame_count}` — each frame has `id`, `data`, `extended`, `remote`.
+
+```bash
+# SPI sniff (software decoder, passive)
+curl -s -X POST http://127.0.0.1:7272/api/digilent/protocol/spi/sniff \
+  -H "Content-Type: application/json" \
+  -d '{"clk_ch": 0, "mosi_ch": 1, "miso_ch": 2, "cs_ch": 3, "spi_freq_hz": 1000000, "mode": 0, "order": "msb", "duration_s": 1.0}'
+```
+
+Response: `{ok, transactions[], transaction_count}` — each transaction has `mosi`, `miso` (byte lists), `bits`.
+
 ---
 
 ## Power Supplies (requires `--allow-supplies` flag)
@@ -846,9 +888,7 @@ GND                →  DUT GND
 
 **Voltage levels:** Analog Discovery 2 DIO logic levels are 3.3 V. Use level-shifters for 5 V devices.
 
-For ESP32 boot/reset sequencing: use GPIO 17/18 directly on the Pi workbench
-(separate skill). The Analog Discovery is for observation, not for driving
-reset/boot pins.
+The Analog Discovery is for observation, not for driving reset/boot pins.
 
 ---
 

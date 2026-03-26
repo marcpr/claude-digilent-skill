@@ -1,6 +1,6 @@
 # claude-digilent-skill
 
-A Claude Code skill and local HTTP server for using a **Digilent Analog Discovery** (or compatible WaveForms device) directly from your development machine — no Raspberry Pi required.
+A Claude Code skill and local HTTP server for using a **Digilent Analog Discovery** (or compatible WaveForms device) directly from your development machine via USB.
 
 The server exposes the device over a local HTTP API at `http://127.0.0.1:7272`. Claude Code interacts with it via `curl` calls, giving it full access to the oscilloscope, logic analyzer, waveform generator, pattern generator, impedance analyzer, digital protocols (UART/SPI/I2C/CAN), power supplies, and digital I/O.
 
@@ -76,7 +76,7 @@ curl -s http://127.0.0.1:7272/api/digilent/status
 # Measure PWM
 curl -s -X POST http://127.0.0.1:7272/api/digilent/measure/basic \
   -H "Content-Type: application/json" \
-  -d '{"action": "measure_esp32_pwm", "params": {"channel": 1, "expected_freq_hz": 1000}}'
+  -d '{"action": "measure_pwm", "params": {"channel": 1, "expected_freq_hz": 1000}}'
 
 # I2C bus scan
 curl -s -X POST http://127.0.0.1:7272/api/digilent/measure/basic \
@@ -185,6 +185,11 @@ Requires `has_impedance: true` or uses scope+wavegen path for non-IA devices.
 | POST | `/protocol/can/configure` | Configure CAN (bit rate, TX/RX pins) |
 | POST | `/protocol/can/send` | Send CAN frame |
 | POST | `/protocol/can/receive` | Receive CAN frame (with timeout) |
+| POST | `/protocol/i2c/spy/configure` | Start passive I2C bus spy (SCL/SDA channels, rate) |
+| POST | `/protocol/i2c/spy/read` | Collect I2C frames for `duration_s` (non-driving) |
+| POST | `/protocol/uart/sniff` | Passive UART capture for `duration_s` |
+| POST | `/protocol/can/sniff` | Passive CAN frame capture for `duration_s` |
+| POST | `/protocol/spi/sniff` | Passive SPI sniff via software decoder for `duration_s` |
 
 Requires `has_protocols: true`. See `docs/device-capabilities.md`.
 
@@ -192,7 +197,7 @@ Requires `has_protocols: true`. See `docs/device-capabilities.md`.
 
 | Action | Description |
 |--------|-------------|
-| `measure_esp32_pwm` | Measure PWM frequency and duty cycle |
+| `measure_pwm` | Measure PWM frequency and duty cycle |
 | `measure_voltage_level` | Measure DC/slow voltage, check tolerance |
 | `detect_logic_activity` | Detect edge activity on digital channels |
 | `bode_sweep` | Wavegen + scope frequency sweep; returns gain/phase arrays and −3 dB point |
@@ -368,13 +373,13 @@ claude-digilent-skill/
 │   ├── integration-guide.md       Integration reference for all instruments
 │   └── extending-waveform-export.md  Developer guide for analysis tools
 ├── tests/
-│   ├── test_digilent_api.py       API integration tests (168 tests)
+│   ├── test_digilent_api.py       API integration tests (120 tests)
 │   ├── test_orchestration_service.py  Orchestration action tests (18 tests)
-│   ├── test_capability_registry.py
+│   ├── test_capability_registry.py    Device registry tests (35 tests)
 │   ├── test_digital_io_service.py
 │   ├── test_impedance_service.py
 │   ├── test_pattern_service.py
-│   └── test_protocol_service.py
+│   └── test_protocol_service.py       Protocol + sniff/spy tests (23 tests)
 └── .claude/
     └── skills/
         └── digilent-local/
@@ -389,7 +394,7 @@ No hardware required — all tests mock the DWF library:
 
 ```bash
 python -m pytest tests/ -v
-# 186 tests, 0 failures
+# 205 tests, 0 failures
 ```
 
 ---
@@ -405,14 +410,6 @@ python -m pytest tests/ -v
 | Digital Discovery DIO channels offset by 24 | Handled automatically by `digital_io_service.py` — use physical channel 0-based indices |
 | ADP5250 supports only I2C/SPI (no UART, no CAN) | Check `capability.has_protocols` and device notes |
 | Impedance mode (ADS Max) is mutually exclusive with scope/wavegen | Disable impedance before using scope or wavegen |
-
----
-
-## Relation to Universal-ESP32-Workbench
-
-This repo is a standalone extraction of the Digilent extension originally developed for the [Universal-ESP32-Workbench](https://github.com/marcpr/Universal-ESP32-Workbench). The workbench provides the same API via a Raspberry Pi over the network (`http://esp32-workbench.local:8080/api/digilent/*`). This repo targets direct local USB access from a developer's machine.
-
-The `digilent/` package is shared code — the same Python modules work in both contexts.
 
 ---
 

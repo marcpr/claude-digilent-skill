@@ -4,6 +4,38 @@ All notable changes to this project are documented here.
 
 ---
 
+## [2.0.1] — 2026-03-26
+
+### Added
+
+#### Passive Protocol Sniff / Spy Endpoints
+- `POST /protocol/i2c/spy/configure` — configure I2C bus spy (SCL/SDA channels, clock rate);
+  returns `{ok, mode, rate_hz}`
+- `POST /protocol/i2c/spy/read` — collect I2C frames passively for `duration_s` (non-driving);
+  returns `{ok, frames[], frame_count, bytes_captured}`
+- `POST /protocol/uart/sniff` — passive UART capture using `uart_receive` poll loop;
+  parameters `rx_ch`, `baud_rate`, `parity`, `duration_s`, `max_bytes`
+- `POST /protocol/can/sniff` — passive CAN frame capture; collects until `max_frames` reached
+  or `duration_s` elapses; returns `{ok, frames[], frame_count}`
+- `POST /protocol/spi/sniff` — passive SPI sniff via `_spi_codec.spi_decode` software decoder;
+  validates `mode` (0–3) and `order` (`msb`/`lsb`); returns `{ok, transactions[], transaction_count}`
+
+#### New Module
+- `digilent/_spi_codec.py` — pure-Python SPI bit-stream decoder; no ctypes/libdwf dependency;
+  supports all four SPI modes, MSB/LSB bit order, active-high/low CS
+
+### Fixed
+- Test isolation bug in `TestSniffServiceLogic`: `test_capability_registry.py` replaces
+  `sys.modules["digilent.dwf_adapter"]` without restoring it; `setUp` now re-syncs
+  `protocol_service.dwf` to the current sys.modules entry before each test.
+
+### Tests
+- 205 unit tests total (up from 186)
+- `test_protocol_service.py` expanded: `TestSniffCapabilityGate` (5 tests),
+  `TestSniffServiceLogic` (9 tests), `TestSpiDecoder` (5 tests)
+
+---
+
 ## [2.0.0-universal] — 2026-03-25
 
 ### Summary

@@ -1125,6 +1125,80 @@ def i2c_write_read(hdwf: c_int, address: int, tx: bytes, rx_len: int) -> tuple[b
     return bytes(rx_buf), nak.value
 
 
+def i2c_spy_start(hdwf: c_int, scl_ch: int, sda_ch: int, rate_hz: float) -> None:
+    """Configure I2C pins and start passive spy mode. No bus traffic is generated."""
+    lib = _load_lib()
+    _check(lib.FDwfDigitalI2cReset(hdwf), "I2cReset")
+    _check(lib.FDwfDigitalI2cRateSet(hdwf, c_double(rate_hz)), "I2cRateSet")
+    _check(lib.FDwfDigitalI2cSclSet(hdwf, c_int(scl_ch)), "I2cSclSet")
+    _check(lib.FDwfDigitalI2cSdaSet(hdwf, c_int(sda_ch)), "I2cSdaSet")
+    _check(lib.FDwfDigitalI2cSpyStart(hdwf), "I2cSpyStart")
+
+
+def i2c_spy_read(hdwf: c_int, max_bytes: int = 256) -> tuple[bool, bool, bytes, int]:
+    """Poll I2C spy status once.
+    Returns (start_seen, stop_seen, data_bytes, nak_count).
+    data_bytes is empty when no new data is available since the last call.
+    """
+    lib = _load_lib()
+    f_start = c_int()
+    f_stop = c_int()
+    buf = (c_ubyte * max_bytes)()
+    c_data = c_int(max_bytes)
+    i_nak = c_int()
+    _check(
+        lib.FDwfDigitalI2cSpyStatus(
+            hdwf, byref(f_start), byref(f_stop), buf, byref(c_data), byref(i_nak),
+        ),
+        "I2cSpyStatus",
+    )
+    return bool(f_start.value), bool(f_stop.value), bytes(buf[:c_data.value]), i_nak.value
+
+
+from ._spi_codec import spi_decode as _spi_decode
+
+
+def spi_sniff_raw(
+    hdwf: c_int,
+    clk_ch: int,
+    mosi_ch: int,
+    miso_ch: int,
+    cs_ch: int,
+    spi_freq_hz: float,
+    mode: int,
+    order: str,
+    duration_s: float,
+    cs_active_low: bool = True,
+) -> list[dict]:
+    """Passively capture SPI transactions using the logic analyzer.
+
+    Captures CLK/MOSI/MISO/CS with the digital-in at 10× the SPI clock, then
+    software-decodes the bit stream into transactions.
+    Returns list of {mosi: [int], miso: [int], bits: int}.
+    """
+    import time as _time
+
+    sample_rate = max(spi_freq_hz * 10.0, 1_000_000.0)
+    total_samples = int(sample_rate * duration_s)
+    total_samples = max(total_samples, 100)
+
+    channels = list({clk_ch, mosi_ch, miso_ch, cs_ch})  # deduplicate
+
+    # Use the existing logic capture (free-run, no trigger)
+    raw = logic_capture_raw(
+        hdwf=hdwf,
+        channels=channels,
+        sample_rate_hz=sample_rate,
+        n_samples=total_samples,
+        trigger_enabled=False,
+        trigger_channel=clk_ch,
+        trigger_edge="rising",
+        trigger_timeout_s=duration_s + 1.0,
+    )
+
+    return _spi_decode(raw, clk_ch, mosi_ch, miso_ch, cs_ch, mode, order, cs_active_low)
+
+
 def can_configure(hdwf: c_int, rate_hz: float, tx_ch: int, rx_ch: int) -> None:
     lib = _load_lib()
     _check(lib.FDwfDigitalCanReset(hdwf), "CanReset")

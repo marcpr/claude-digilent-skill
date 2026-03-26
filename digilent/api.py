@@ -33,10 +33,13 @@ from .models import (
     CanConfigureRequest,
     CanReceiveRequest,
     CanSendRequest,
+    CanSniffRequest,
     DigitalIOConfigureRequest,
     DigitalIOWriteRequest,
     I2cConfigureRequest,
     I2cReadRequest,
+    I2cSpyConfigureRequest,
+    I2cSpyReadRequest,
     I2cWriteReadRequest,
     I2cWriteRequest,
     ImpedanceCompensationRequest,
@@ -50,6 +53,7 @@ from .models import (
     ScopeRecordRequest,
     ScopeSampleRequest,
     SpiConfigureRequest,
+    SpiSniffRequest,
     SpiTransferRequest,
     StaticIoRequest,
     SuppliesMasterRequest,
@@ -58,6 +62,7 @@ from .models import (
     UartConfigureRequest,
     UartReceiveRequest,
     UartSendRequest,
+    UartSniffRequest,
     WavegenRequest,
 )
 from .orchestration import OrchestrationService
@@ -188,6 +193,11 @@ def handle_post(handler, path: str) -> None:
         "/api/digilent/protocol/i2c/write": _h_i2c_write,
         "/api/digilent/protocol/i2c/read": _h_i2c_read,
         "/api/digilent/protocol/i2c/write-read": _h_i2c_write_read,
+        "/api/digilent/protocol/i2c/spy/configure": _h_i2c_spy_configure,
+        "/api/digilent/protocol/i2c/spy/read": _h_i2c_spy_read,
+        "/api/digilent/protocol/uart/sniff": _h_uart_sniff,
+        "/api/digilent/protocol/can/sniff": _h_can_sniff,
+        "/api/digilent/protocol/spi/sniff": _h_spi_sniff,
         "/api/digilent/protocol/can/configure": _h_can_configure,
         "/api/digilent/protocol/can/send": _h_can_send,
         "/api/digilent/protocol/can/receive": _h_can_receive,
@@ -575,6 +585,45 @@ def _h_i2c_write_read(handler) -> None:
         return
     req = I2cWriteReadRequest.from_dict(handler._read_json() or {})
     _run(handler, _protocol.i2c_write_read, req)
+
+
+# ---------------------------------------------------------------------------
+# Protocol handlers — Sniff
+# ---------------------------------------------------------------------------
+
+def _h_i2c_spy_configure(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = I2cSpyConfigureRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.i2c_spy_configure, req)
+
+
+def _h_i2c_spy_read(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = I2cSpyReadRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.i2c_spy_read, req)
+
+
+def _h_uart_sniff(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = UartSniffRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.uart_sniff, req)
+
+
+def _h_can_sniff(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = CanSniffRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.can_sniff, req)
+
+
+def _h_spi_sniff(handler) -> None:
+    if _ok_if_not_init(handler):
+        return
+    req = SpiSniffRequest.from_dict(handler._read_json() or {})
+    _run(handler, _protocol.spi_sniff, req)
 
 
 # ---------------------------------------------------------------------------

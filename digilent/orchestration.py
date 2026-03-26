@@ -47,7 +47,8 @@ class OrchestrationService:
     def measure_basic(self, action: str, params: dict) -> dict:
         """Dispatch a named high-level measurement action."""
         dispatch = {
-            "measure_esp32_pwm": self._measure_esp32_pwm,
+            "measure_pwm": self._measure_pwm,
+            "measure_esp32_pwm": self._measure_pwm,  # legacy alias
             "measure_voltage_level": self._measure_voltage_level,
             "detect_logic_activity": self._detect_logic_activity,
             "bode_sweep": self._bode_sweep,
@@ -65,18 +66,18 @@ class OrchestrationService:
         return handler(params)
 
     # -----------------------------------------------------------------------
-    # Action: measure_esp32_pwm
+    # Action: measure_pwm
     # -----------------------------------------------------------------------
 
-    def _measure_esp32_pwm(self, params: dict) -> dict:
+    def _measure_pwm(self, params: dict) -> dict:
         """
-        Measure PWM output from an ESP32 GPIO.
+        Measure PWM signal frequency and duty cycle on a scope channel.
 
         params:
             channel (int): Scope channel (default: 1)
             expected_freq_hz (float): Expected PWM frequency
             tolerance_percent (float): Acceptable deviation in percent (default: 5)
-            sample_rate_hz (int): Scope sample rate (default: 2×expected)
+            sample_rate_hz (int): Scope sample rate (default: 20×expected)
             duration_ms (int): Capture window (default: 20)
         """
         ch = int(params.get("channel", 1))
@@ -109,7 +110,7 @@ class OrchestrationService:
         return {
             "ok": True,
             "ts": datetime.now(timezone.utc).isoformat(),
-            "action": "measure_esp32_pwm",
+            "action": "measure_pwm",
             "within_tolerance": within,
             "result": {
                 "measured_freq_hz": measured_hz,

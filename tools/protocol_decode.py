@@ -2,22 +2,34 @@
 """
 Digital protocol capture and decode tool.
 
-Configures a digital protocol (UART, SPI, I2C, or CAN), captures data for
-a specified duration, formats it as a hex+ASCII dump, and writes a Markdown
-summary report.
+Two modes per protocol:
+  Active (master) — the AD2 drives the bus and reads responses.
+  Sniff (passive) — the AD2 listens only; no bus traffic is generated.
 
-Usage:
-    # UART capture at 115200 baud, 2 seconds, TX on DIO0, RX on DIO1
+Usage examples:
+    # UART active capture (master TX + RX)
     python protocol_decode.py uart --baud 115200 --tx 0 --rx 1 --duration 2.0 --out uart_capture
 
-    # I2C bus capture at 100 kHz
-    python protocol_decode.py i2c --rate 100000 --scl 0 --sda 1 --duration 1.0 --out i2c_capture
+    # UART passive sniff (RX only, no TX driven)
+    python protocol_decode.py uart-sniff --baud 115200 --rx 1 --duration 2.0 --out uart_sniff
 
-    # SPI capture at 1 MHz
+    # I2C bus scan (active master)
+    python protocol_decode.py i2c --rate 100000 --scl 0 --sda 1 --duration 1.0 --out i2c_scan
+
+    # I2C passive spy (SDK-native, monitors any I2C master)
+    python protocol_decode.py i2c-spy --rate 100000 --scl 0 --sda 1 --duration 2.0 --out i2c_spy
+
+    # SPI active transfer (drives MOSI/CLK/CS)
     python protocol_decode.py spi --freq 1000000 --clk 0 --mosi 1 --miso 2 --cs 3 --out spi_capture
 
-    # CAN bus capture at 500 kbps
+    # SPI passive sniff (logic capture + software decode)
+    python protocol_decode.py spi-sniff --freq 1000000 --clk 0 --mosi 1 --miso 2 --cs 3 --duration 1.0 --out spi_sniff
+
+    # CAN bus active receive
     python protocol_decode.py can --rate 500000 --tx 0 --rx 1 --duration 2.0 --out can_capture
+
+    # CAN passive sniff (RX only, no TX driven)
+    python protocol_decode.py can-sniff --rate 500000 --rx 1 --duration 2.0 --out can_sniff
 """
 
 import argparse
@@ -253,6 +265,144 @@ def capture_can(base, args):
 
 
 # ---------------------------------------------------------------------------
+# UART sniff (passive RX only)
+# ---------------------------------------------------------------------------
+
+def capture_uart_sniff(base, args):
+    print(f"  Passively sniffing UART @ {args.baud} baud, RX={args.rx}")
+    resp = post(base, "/api/digilent/protocol/uart/sniff", {
+        "baud_rate": args.baud,
+        "bits": 8,
+        "parity": "none",
+        "stop_bits": 1.0,
+        "rx_ch": args.rx,
+        "duration_s": args.duration,
+        "max_bytes": 4096,
+    })
+    if not resp.get("ok"):
+        raise RuntimeError(f"UART sniff failed: {resp}")
+
+    data_str = resp.get("data", "")
+    data_bytes = data_str.encode("utf-8", errors="replace")
+    warnings = resp.get("warnings", [])
+    return {
+        "protocol": "uart_sniff",
+        "bytes_received": resp.get("bytes_received", 0),
+        "raw": data_bytes,
+        "frames": [{"data": data_bytes}],
+        "errors": len(warnings),
+        "warnings": warnings,
+        "meta": {"baud_rate": args.baud, "rx_ch": args.rx},
+    }
+
+
+# ---------------------------------------------------------------------------
+# I2C spy (passive — SDK-native)
+# ---------------------------------------------------------------------------
+
+def capture_i2c_spy(base, args):
+    print(f"  Configuring I2C spy @ {args.rate} Hz, SCL={args.scl}, SDA={args.sda}")
+    resp = post(base, "/api/digilent/protocol/i2c/spy/configure", {
+        "rate_hz": args.rate,
+        "scl_ch": args.scl,
+        "sda_ch": args.sda,
+    })
+    if not resp.get("ok"):
+        raise RuntimeError(f"I2C spy configure failed: {resp}")
+
+    print(f"  Sniffing for {args.duration} s (passive — no bus traffic generated)...")
+    resp = post(base, "/api/digilent/protocol/i2c/spy/read", {
+        "duration_s": args.duration,
+        "max_bytes": 256,
+        "max_frames": 500,
+    })
+    if not resp.get("ok"):
+        raise RuntimeError(f"I2C spy read failed: {resp}")
+
+    frames = resp.get("frames", [])
+    bytes_captured = resp.get("bytes_captured", 0)
+    raw = bytes(b for fr in frames for b in fr.get("data", []))
+    return {
+        "protocol": "i2c_spy",
+        "bytes_received": bytes_captured,
+        "raw": raw,
+        "frames": frames,
+        "errors": sum(fr.get("nak", 0) for fr in frames),
+        "warnings": [],
+        "meta": {"rate_hz": args.rate, "frame_count": len(frames)},
+    }
+
+
+# ---------------------------------------------------------------------------
+# SPI sniff (passive — logic capture + software decode)
+# ---------------------------------------------------------------------------
+
+def capture_spi_sniff(base, args):
+    print(f"  Passively sniffing SPI @ {args.freq} Hz, "
+          f"CLK={args.clk}, MOSI={args.mosi}, MISO={args.miso}, CS={args.cs}")
+    resp = post(base, "/api/digilent/protocol/spi/sniff", {
+        "clk_ch": args.clk,
+        "mosi_ch": args.mosi,
+        "miso_ch": args.miso,
+        "cs_ch": args.cs,
+        "spi_freq_hz": args.freq,
+        "mode": args.mode,
+        "order": "msb",
+        "duration_s": args.duration,
+        "cs_active_low": True,
+    })
+    if not resp.get("ok"):
+        raise RuntimeError(f"SPI sniff failed: {resp}")
+
+    transactions = resp.get("transactions", [])
+    raw = bytes(b for t in transactions for b in t.get("mosi", []))
+    frames = [
+        {"tx": t.get("mosi", []), "rx": t.get("miso", []), "bits": t.get("bits", 0)}
+        for t in transactions
+    ]
+    return {
+        "protocol": "spi_sniff",
+        "bytes_received": sum(len(t.get("mosi", [])) for t in transactions),
+        "raw": raw,
+        "frames": frames,
+        "errors": 0,
+        "warnings": [],
+        "meta": {"freq_hz": args.freq, "mode": args.mode,
+                 "transaction_count": len(transactions)},
+    }
+
+
+# ---------------------------------------------------------------------------
+# CAN sniff (passive RX only)
+# ---------------------------------------------------------------------------
+
+def capture_can_sniff(base, args):
+    print(f"  Passively sniffing CAN @ {args.rate} bps, RX={args.rx}")
+    resp = post(base, "/api/digilent/protocol/can/sniff", {
+        "rx_ch": args.rx,
+        "rate_hz": args.rate,
+        "duration_s": args.duration,
+        "max_frames": 200,
+    })
+    if not resp.get("ok"):
+        raise RuntimeError(f"CAN sniff failed: {resp}")
+
+    frames = resp.get("frames", [])
+    raw_bytes = bytes(b for fr in frames for b in fr.get("data", []))
+    for i, fr in enumerate(frames):
+        print(f"    Frame #{i+1}: ID={fr.get('id','?')} data={bytes(fr.get('data',[])).hex()}")
+    return {
+        "protocol": "can_sniff",
+        "bytes_received": len(raw_bytes),
+        "raw": raw_bytes,
+        "frames": frames,
+        "errors": 0,
+        "warnings": [],
+        "meta": {"rate_hz": args.rate, "frame_count": len(frames)},
+    }
+
+
+# ---------------------------------------------------------------------------
 # Markdown report writer
 # ---------------------------------------------------------------------------
 
@@ -333,9 +483,93 @@ def write_report(out_path: pathlib.Path, capture_result: dict, args):
         if len(frames) > 50:
             lines.append(f"| … | … | … | … | … | … |")
         lines.append("")
+    elif protocol == "I2C_SPY":
+        lines += [
+            f"## Configuration",
+            f"",
+            f"| Parameter | Value |",
+            f"|-----------|-------|",
+            f"| Rate | {meta.get('rate_hz', '-')} Hz |",
+            f"| Frames captured | {meta.get('frame_count', len(frames))} |",
+            f"",
+            f"## Sniffed Frames",
+            f"",
+            f"| # | Start | Stop | Address | Data (hex) | NAK |",
+            f"|---|-------|------|---------|-----------|-----|",
+        ]
+        for i, fr in enumerate(frames[:100]):
+            data = fr.get("data", [])
+            addr = f"0x{data[0]:02X}" if data else "-"
+            payload = bytes(data[1:]).hex(" ") if len(data) > 1 else "(empty)"
+            lines.append(
+                f"| {i+1} | {fr.get('start', False)} | {fr.get('stop', False)} "
+                f"| {addr} | `{payload}` | {fr.get('nak', 0)} |"
+            )
+        if len(frames) > 100:
+            lines.append("| … | … | … | … | … | … |")
+        lines.append("")
+    elif protocol == "UART_SNIFF":
+        lines += [
+            f"## Configuration",
+            f"",
+            f"| Parameter | Value |",
+            f"|-----------|-------|",
+            f"| Baud rate | {meta.get('baud_rate', '-')} |",
+            f"| RX channel | {meta.get('rx_ch', '-')} |",
+            f"| Mode | Passive sniff (no TX) |",
+            f"",
+        ]
+    elif protocol == "SPI_SNIFF":
+        lines += [
+            f"## Configuration",
+            f"",
+            f"| Parameter | Value |",
+            f"|-----------|-------|",
+            f"| Frequency | {meta.get('freq_hz', '-')} Hz |",
+            f"| Mode | {meta.get('mode', '-')} (CPOL/CPHA) |",
+            f"| Transactions | {meta.get('transaction_count', len(frames))} |",
+            f"",
+            f"## Sniffed Transactions",
+            f"",
+            f"| # | Bits | MOSI (hex) | MISO (hex) |",
+            f"|---|------|-----------|-----------|",
+        ]
+        for i, fr in enumerate(frames[:50]):
+            mosi_hex = bytes(fr.get("tx", [])).hex(" ") or "(empty)"
+            miso_hex = bytes(fr.get("rx", [])).hex(" ") or "(empty)"
+            lines.append(
+                f"| {i+1} | {fr.get('bits', '?')} | `{mosi_hex}` | `{miso_hex}` |"
+            )
+        if len(frames) > 50:
+            lines.append("| … | … | … | … |")
+        lines.append("")
+    elif protocol == "CAN_SNIFF":
+        lines += [
+            f"## Configuration",
+            f"",
+            f"| Parameter | Value |",
+            f"|-----------|-------|",
+            f"| Bit rate | {meta.get('rate_hz', '-')} bps |",
+            f"| Mode | Passive sniff (no TX) |",
+            f"",
+            f"## Sniffed Frames",
+            f"",
+            f"| # | ID | DLC | Data (hex) | Extended | Remote |",
+            f"|---|----|-----|-----------|----------|--------|",
+        ]
+        for i, fr in enumerate(frames[:50]):
+            data_hex = bytes(fr.get("data", [])).hex(" ") or "(empty)"
+            dlc = len(fr.get("data", []))
+            lines.append(
+                f"| {i+1} | {fr.get('id','?')} | {dlc} | `{data_hex}` "
+                f"| {fr.get('extended', False)} | {fr.get('remote', False)} |"
+            )
+        if len(frames) > 50:
+            lines.append("| … | … | … | … | … | … |")
+        lines.append("")
 
-    # Hex dump for UART/SPI
-    if raw and protocol in ("UART", "SPI"):
+    # Hex dump for UART/SPI captures and sniffs
+    if raw and protocol in ("UART", "SPI", "UART_SNIFF", "SPI_SNIFF", "I2C_SPY"):
         dump_lines = hex_dump(raw[:512])  # cap at 512 bytes for report
         lines += [
             f"## Hex Dump{' (first 512 bytes)' if len(raw) > 512 else ''}",
@@ -418,6 +652,33 @@ def build_parser():
     p_can.add_argument("--tx", type=int, default=0, help="TX DIO channel")
     p_can.add_argument("--rx", type=int, default=1, help="RX DIO channel")
 
+    # ---- Sniff subcommands ------------------------------------------------
+
+    # UART sniff
+    p_uart_sniff = sub.add_parser("uart-sniff", help="UART passive sniff (RX only, no TX driven)")
+    p_uart_sniff.add_argument("--baud", type=int, default=115200)
+    p_uart_sniff.add_argument("--rx", type=int, default=1, help="RX DIO channel")
+
+    # I2C spy
+    p_i2c_spy = sub.add_parser("i2c-spy", help="I2C passive spy (SDK-native, no bus traffic)")
+    p_i2c_spy.add_argument("--rate", type=float, default=100_000.0, help="Bus rate Hz")
+    p_i2c_spy.add_argument("--scl", type=int, default=0, help="SCL DIO channel")
+    p_i2c_spy.add_argument("--sda", type=int, default=1, help="SDA DIO channel")
+
+    # SPI sniff
+    p_spi_sniff = sub.add_parser("spi-sniff", help="SPI passive sniff (logic capture + decode)")
+    p_spi_sniff.add_argument("--freq", type=float, default=1_000_000.0, help="SPI clock Hz")
+    p_spi_sniff.add_argument("--mode", type=int, default=0, choices=[0, 1, 2, 3])
+    p_spi_sniff.add_argument("--clk", type=int, default=0)
+    p_spi_sniff.add_argument("--mosi", type=int, default=1)
+    p_spi_sniff.add_argument("--miso", type=int, default=2)
+    p_spi_sniff.add_argument("--cs", type=int, default=3)
+
+    # CAN sniff
+    p_can_sniff = sub.add_parser("can-sniff", help="CAN passive sniff (RX only, no TX driven)")
+    p_can_sniff.add_argument("--rate", type=float, default=500_000.0, help="Bit rate Hz")
+    p_can_sniff.add_argument("--rx", type=int, default=1, help="RX DIO channel")
+
     return parser
 
 
@@ -439,6 +700,10 @@ def main():
         "i2c": capture_i2c,
         "spi": capture_spi,
         "can": capture_can,
+        "uart-sniff": capture_uart_sniff,
+        "i2c-spy": capture_i2c_spy,
+        "spi-sniff": capture_spi_sniff,
+        "can-sniff": capture_can_sniff,
     }
 
     try:

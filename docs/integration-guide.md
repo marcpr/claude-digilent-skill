@@ -592,13 +592,13 @@ Response format:
 }
 ```
 
-### measure_esp32_pwm
+### measure_pwm
 
 Measure PWM frequency and duty cycle.
 
 ```json
 {
-  "action": "measure_esp32_pwm",
+  "action": "measure_pwm",
   "params": {
     "channel": 1,
     "expected_freq_hz": 1000,

@@ -45,13 +45,13 @@ class TestOrchestrationDispatch(unittest.TestCase):
     def test_all_actions_in_dispatch(self):
         svc = _make_orchestration()
         # Patch each sub-handler to return a minimal result
-        for attr in ("_measure_esp32_pwm", "_measure_voltage_level",
+        for attr in ("_measure_pwm", "_measure_voltage_level",
                      "_detect_logic_activity", "_bode_sweep",
                      "_uart_loopback_test", "_i2c_scan",
                      "_characterize_supply", "_digital_frequency"):
             setattr(svc, attr, lambda p: {"ok": True})
         actions = [
-            "measure_esp32_pwm", "measure_voltage_level", "detect_logic_activity",
+            "measure_pwm", "measure_voltage_level", "detect_logic_activity",
             "bode_sweep", "uart_loopback_test", "i2c_scan",
             "characterize_supply", "digital_frequency",
         ]

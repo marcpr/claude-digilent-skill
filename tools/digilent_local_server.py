@@ -10,7 +10,6 @@ Usage:
     python tools/digilent_local_server.py --port 7272
     python tools/digilent_local_server.py --no-auto-open
 
-The API is identical to the Universal-ESP32-Workbench /api/digilent/* endpoints.
 See .claude/skills/digilent-local/SKILL.md for usage with Claude Code.
 """
 
